@@ -20,7 +20,7 @@ async function findMatch() {
   }
 
   // Gửi mục tiêu đến server để match (gọi API backend)
-  const response = await fetch("https://1e37-2402-800-6149-b5a7-d4a3-d09d-ee22.ngrok-free.app/match", {
+  const response = await fetch("https://dotcool-2.onrender.com/match", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ goal }),
@@ -44,8 +44,8 @@ async function startWebRTC(isCaller, roomId) {
     remoteVideo.srcObject = event.streams[0];
   };
 
-  // Signaling
-  const socket = new WebSocket(`wss://1e37-2402-800-6149-b5a7-d4a3-d09d-ee22.ngrok-free.app/ws/${roomId}`);
+  // Sử dụng WebSocket qua WSS (bắt buộc vì đang dùng HTTPS)
+  const socket = new WebSocket(`wss://dotcool-2.onrender.com/ws/${roomId}`);
 
   socket.onmessage = async ({ data }) => {
     const msg = JSON.parse(data);
@@ -82,5 +82,3 @@ async function startWebRTC(isCaller, roomId) {
     socket.onopen = () => socket.send(JSON.stringify({ offer }));
   }
 }
-
-
