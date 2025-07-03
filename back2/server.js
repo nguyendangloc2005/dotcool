@@ -1,29 +1,24 @@
-// server.js
+const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
+const cors = require("cors");
 
-const server = http.createServer((req, res) => {
-  if (req.method === "POST" && req.url === "/match") {
-    let body = "";
-    req.on("data", chunk => {
-      body += chunk.toString();
-    });
-    req.on("end", () => {
-      const { goal } = JSON.parse(body);
-      const roomId = matchGoal(goal);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ roomId }));
-    });
-  } else {
-    res.writeHead(404);
-    res.end();
-  }
-});
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-const wss = new WebSocket.Server({ server });
+// Lưu trữ các phòng
 const rooms = {};
 
+// Xử lý POST /match
+app.post("/match", (req, res) => {
+  const { goal } = req.body;
+  const roomId = matchGoal(goal);
+  res.json({ roomId });
+});
+
+// Hàm ghép người có cùng mục tiêu
 function matchGoal(goal) {
   for (const [roomId, clients] of Object.entries(rooms)) {
     if (clients.length === 1 && clients[0].goal === goal) {
@@ -35,20 +30,26 @@ function matchGoal(goal) {
   return newRoomId;
 }
 
+// Tạo server
+const server = http.createServer(app);
+
+// WebSocket path theo room
+const wss = new WebSocket.Server({ server, path: "/ws/:roomId" });
+
+// Xử lý kết nối WebSocket
 wss.on("connection", (ws, req) => {
-  const url = new URL(req.url, "http://localhost");
+  const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = url.pathname.split("/").pop();
 
-  if (!rooms[roomId]) {
-    rooms[roomId] = [];
-  }
+  if (!rooms[roomId]) rooms[roomId] = [];
 
   ws.goal = null;
   ws.roomId = roomId;
   rooms[roomId].push(ws);
 
   ws.on("message", (msg) => {
-    let data = JSON.parse(msg);
+    const data = JSON.parse(msg);
+
     if (data.goal) {
       ws.goal = data.goal;
       return;
@@ -68,15 +69,8 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-const os = require("os");
-const PORT = 8000;
-
-const ip = Object.values(os.networkInterfaces())
-  .flat()
-  .find(i => i.family === 'IPv4' && !i.internal).address;
-
+// Khởi động server
+const PORT = process.env.PORT || 8000;
 server.listen(PORT, () => {
-  console.log(`Backend running at http://${ip}:${PORT}`);
+  console.log(`✅ Backend WebSocket server running on port ${PORT}`);
 });
-
-
