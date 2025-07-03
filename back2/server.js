@@ -41,6 +41,7 @@ wss.on("connection", (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = url.searchParams.get("roomId");
 
+
   if (!rooms[roomId]) rooms[roomId] = [];
 
   ws.goal = null;
