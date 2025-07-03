@@ -8,17 +8,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Lưu trữ các phòng
 const rooms = {};
 
-// Xử lý POST /match
+// API POST /match
 app.post("/match", (req, res) => {
   const { goal } = req.body;
   const roomId = matchGoal(goal);
-  res.json({ roomId });
+  const isCaller = rooms[roomId].length === 1;
+  res.json({ roomId, isCaller });
 });
 
-// Hàm ghép người có cùng mục tiêu
+// Hàm tìm hoặc tạo phòng
 function matchGoal(goal) {
   for (const [roomId, clients] of Object.entries(rooms)) {
     if (clients.length === 1 && clients[0].goal === goal) {
@@ -30,31 +30,31 @@ function matchGoal(goal) {
   return newRoomId;
 }
 
-// Tạo server
+// Tạo HTTP server
 const server = http.createServer(app);
 
-// WebSocket path theo room
-const wss = new WebSocket.Server({ server, path: "/ws/:roomId" });
+// Tạo WebSocket server (không đặt path)
+const wss = new WebSocket.Server({ server });
 
-// Xử lý kết nối WebSocket
+// Xử lý WebSocket kết nối
 wss.on("connection", (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = url.searchParams.get("roomId");
 
+  if (!roomId) {
+    ws.close();
+    return;
+  }
 
-  if (!rooms[roomId]) rooms[roomId] = [];
+  if (!rooms[roomId]) {
+    rooms[roomId] = [];
+  }
 
-  ws.goal = null;
   ws.roomId = roomId;
   rooms[roomId].push(ws);
 
   ws.on("message", (msg) => {
     const data = JSON.parse(msg);
-
-    if (data.goal) {
-      ws.goal = data.goal;
-      return;
-    }
 
     const others = rooms[roomId].filter(client => client !== ws && client.readyState === WebSocket.OPEN);
     for (const client of others) {
