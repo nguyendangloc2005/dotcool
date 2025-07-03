@@ -45,7 +45,8 @@ async function startWebRTC(isCaller, roomId) {
   };
 
   // Sử dụng WebSocket qua WSS (bắt buộc vì đang dùng HTTPS)
-  const socket = new WebSocket(`wss://dotcool-2.onrender.com/ws/${roomId}`);
+  const socket = new WebSocket(`wss://dotcool-2.onrender.com/ws?roomId=${roomId}`);
+
 
   socket.onmessage = async ({ data }) => {
     const msg = JSON.parse(data);
