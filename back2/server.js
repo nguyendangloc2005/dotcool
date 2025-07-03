@@ -39,7 +39,7 @@ const wss = new WebSocket.Server({ server, path: "/ws/:roomId" });
 // Xử lý kết nối WebSocket
 wss.on("connection", (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const roomId = url.pathname.split("/").pop();
+  const roomId = url.searchParams.get("roomId");
 
   if (!rooms[roomId]) rooms[roomId] = [];
 
