@@ -7,19 +7,9 @@
     "start": "node server.js"
   },
   "dependencies": {
-  "express": "^4.21.2",
-  "cors": "^2.8.5",
-  "uuid": "^9.0.1",
-  "ws": "^8.18.3"
-  },
-  "dependencies": {
-  "express": "^4.18.2"
-  },
-  "scripts": {
-    "start": "node server.js"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": ""
+    "express": "^4.21.2",
+    "cors": "^2.8.5",
+    "uuid": "^9.0.1",
+    "ws": "^8.18.3"
+  }
 }
