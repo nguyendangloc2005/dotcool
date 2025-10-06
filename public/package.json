@@ -1,0 +1,16 @@
+{
+  "name": "webrtc-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for WebRTC video call application",
+  "main": "app.js",
+  "scripts": {
+    "start": "serve -s .",
+    "build": "echo 'No build step required for static site' && exit 0"
+  },
+  "dependencies": {
+    "serve": "^14.2.3"
+  },
+  "keywords": ["webrtc", "video-call", "frontend"],
+  "author": "",
+  "license": "ISC"
+}
