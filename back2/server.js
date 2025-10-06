@@ -41,31 +41,40 @@ wss.on("connection", (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = url.searchParams.get("roomId");
 
+  console.log("✅ New connection, room:", roomId);
+
   if (!roomId) {
     ws.close();
     return;
   }
 
-  if (!rooms[roomId]) {
-    rooms[roomId] = [];
-  }
-
-  ws.roomId = roomId;
+  if (!rooms[roomId]) rooms[roomId] = [];
   rooms[roomId].push(ws);
 
-  ws.on("message", (msg) => {
-    const data = JSON.parse(msg);
+  console.log("👥 Clients in room:", rooms[roomId].length);
 
-    const others = rooms[roomId].filter(client => client !== ws && client.readyState === WebSocket.OPEN);
-    for (const client of others) {
-      client.send(JSON.stringify(data));
+  ws.on("message", (msg) => {
+    try {
+      const data = JSON.parse(msg);
+      console.log("📩 Message in room", roomId, ":", Object.keys(data));
+
+      const others = rooms[roomId].filter(
+        (client) => client !== ws && client.readyState === WebSocket.OPEN
+      );
+      for (const client of others) {
+        client.send(JSON.stringify(data));
+      }
+    } catch (err) {
+      console.error("❌ Lỗi parse message:", err.message);
     }
   });
 
   ws.on("close", () => {
-    rooms[roomId] = rooms[roomId].filter(client => client !== ws);
+    console.log("❌ Client left room", roomId);
+    rooms[roomId] = rooms[roomId].filter((client) => client !== ws);
     if (rooms[roomId].length === 0) {
       delete rooms[roomId];
+      console.log("🗑️ Room deleted:", roomId);
     }
   });
 });
