@@ -20,7 +20,7 @@ async function findMatch() {
   }
 
   // Gửi mục tiêu đến server để match (gọi API backend)
-  const response = await fetch("https://dotcool-back2.onrender.com/match/", {
+  const response = await fetch("https://dotcool-back2.onrender.com/match", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ goal }),
@@ -34,19 +34,29 @@ async function findMatch() {
 }
 
 async function startWebRTC(isCaller, roomId) {
-  peerConnection = new RTCPeerConnection();
+  // ✅ Thêm STUN server để hoạt động qua Internet
+  peerConnection = new RTCPeerConnection({
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" }
+    ]
+  });
 
+  // Thêm luồng video/audio cục bộ
   localStream.getTracks().forEach(track => {
     peerConnection.addTrack(track, localStream);
   });
 
+  // Khi nhận được stream từ đối phương
   peerConnection.ontrack = event => {
     remoteVideo.srcObject = event.streams[0];
   };
 
-  // Sử dụng WebSocket qua WSS (bắt buộc vì đang dùng HTTPS)
-const socket = new WebSocket("wss://dotcool-back2.onrender.com/ws?roomId=" + roomId);
+  // Kết nối WebSocket bảo mật qua HTTPS
+  const socket = new WebSocket(`wss://dotcool-back2.onrender.com/ws?roomId=${roomId}`);
 
+  socket.onopen = () => {
+    console.log("🔗 WebSocket connected to room:", roomId);
+  };
 
   socket.onmessage = async ({ data }) => {
     const msg = JSON.parse(data);
@@ -80,6 +90,6 @@ const socket = new WebSocket("wss://dotcool-back2.onrender.com/ws?roomId=" + roo
   if (isCaller) {
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
-    socket.onopen = () => socket.send(JSON.stringify({ offer }));
+    socket.send(JSON.stringify({ offer }));
   }
 }
