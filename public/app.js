@@ -1,95 +1,126 @@
+// === DOM ===
 const localVideo = document.getElementById("localVideo");
 const remoteVideo = document.getElementById("remoteVideo");
 let localStream;
 let peerConnection;
+let socket;
 
+// === BẮT ĐẦU TÌM NGƯỜI ===
 async function findMatch() {
   const goal = document.getElementById("goalInput").value.trim();
   if (!goal) {
-    alert("Hãy nhập mục tiêu của bạn.");
+    alert("Hãy nhập mục tiêu của bạn!");
     return;
   }
 
-  // Lấy media stream
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    // 🔹 Lấy camera & mic
+    localStream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: true,
+    });
     localVideo.srcObject = localStream;
   } catch (err) {
-    alert("Không thể truy cập camera/micro: " + err.message);
+    alert("Không thể truy cập camera hoặc micro: " + err.message);
     return;
   }
 
-  // Gửi mục tiêu đến server để match (gọi API backend)
+  // 🔹 Gửi mục tiêu đến server Render (API backend)
   const response = await fetch("https://dotcool-back2.onrender.com/match", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ goal }),
   });
 
-  const data = await response.json();
-  const isCaller = data.isCaller;
-  const roomId = data.roomId;
+  const { roomId, isCaller } = await response.json();
+  console.log("🎯 Kết nối với room:", roomId, "| Caller:", isCaller);
 
+  // 🔹 Bắt đầu WebRTC
   startWebRTC(isCaller, roomId);
 }
 
+// === KHỞI TẠO KẾT NỐI WEBRTC ===
 async function startWebRTC(isCaller, roomId) {
-  // ✅ Thêm STUN server để hoạt động qua Internet
+  // 🔹 Thêm STUN + TURN server để hoạt động qua Internet
   peerConnection = new RTCPeerConnection({
     iceServers: [
-      { urls: "stun:stun.l.google.com:19302" }
-    ]
+      { urls: "stun:stun.l.google.com:19302" },
+      {
+        urls: "turn:relay.metered.ca:80",
+        username: "openai",
+        credential: "openai",
+      },
+    ],
   });
 
-  // Thêm luồng video/audio cục bộ
-  localStream.getTracks().forEach(track => {
-    peerConnection.addTrack(track, localStream);
-  });
+  // 🔹 Gửi ICE candidate qua WebSocket
+  peerConnection.onicecandidate = ({ candidate }) => {
+    if (candidate) {
+      socket.send(JSON.stringify({ type: "candidate", candidate }));
+      console.log("📤 Gửi ICE candidate");
+    }
+  };
 
-  // Khi nhận được stream từ đối phương
-  peerConnection.ontrack = event => {
+  // 🔹 Khi nhận được stream từ người kia
+  peerConnection.ontrack = (event) => {
+    console.log("📺 Nhận stream từ người kia");
     remoteVideo.srcObject = event.streams[0];
   };
 
-  // Kết nối WebSocket bảo mật qua HTTPS
-  const socket = new WebSocket(`wss://dotcool-back2.onrender.com/ws?roomId=${roomId}`);
+  // 🔹 Thêm local stream vào kết nối
+  localStream.getTracks().forEach((track) => {
+    peerConnection.addTrack(track, localStream);
+  });
 
-  socket.onopen = () => {
-    console.log("🔗 WebSocket connected to room:", roomId);
+  // === KẾT NỐI WEBSOCKET ===
+  socket = new WebSocket(
+    "wss://dotcool-back2.onrender.com?roomId=" + roomId
+  );
+
+  socket.onopen = async () => {
+    console.log("✅ Đã kết nối WebSocket");
+
+    if (isCaller) {
+      // Caller tạo offer
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      socket.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+      console.log("📤 Gửi offer");
+    }
   };
 
-  socket.onmessage = async ({ data }) => {
-    const msg = JSON.parse(data);
+  socket.onmessage = async (event) => {
+    const data = JSON.parse(event.data);
+    console.log("📩 Nhận:", data.type || Object.keys(data)[0]);
 
-    if (msg.answer) {
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.answer));
-    }
-
-    if (msg.offer) {
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
+    if (data.type === "offer") {
+      // Người nhận set offer
+      await peerConnection.setRemoteDescription(
+        new RTCSessionDescription({ type: "offer", sdp: data.sdp })
+      );
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
-      socket.send(JSON.stringify({ answer }));
-    }
-
-    if (msg.iceCandidate) {
+      socket.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
+      console.log("📤 Gửi answer");
+    } else if (data.type === "answer") {
+      await peerConnection.setRemoteDescription(
+        new RTCSessionDescription({ type: "answer", sdp: data.sdp })
+      );
+      console.log("✅ Đã nhận answer");
+    } else if (data.type === "candidate" && data.candidate) {
       try {
-        await peerConnection.addIceCandidate(msg.iceCandidate);
-      } catch (e) {
-        console.error("Lỗi ICE", e);
+        await peerConnection.addIceCandidate(data.candidate);
+        console.log("✅ Thêm ICE candidate");
+      } catch (err) {
+        console.error("Lỗi thêm ICE:", err);
       }
     }
   };
 
-  peerConnection.onicecandidate = ({ candidate }) => {
-    if (candidate) {
-      socket.send(JSON.stringify({ iceCandidate: candidate }));
-    }
+  socket.onclose = () => {
+    console.log("❌ WebSocket đóng kết nối");
   };
-
-  if (isCaller) {
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    socket.send(JSON.stringify({ offer }));
-  }
 }
+
+// === GÁN NÚT BẮT ĐẦU ===
+document.getElementById("findBtn").addEventListener("click", findMatch);
