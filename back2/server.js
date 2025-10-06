@@ -8,30 +8,30 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Mỗi phòng chứa danh sách client WebSocket và goal chung
 const rooms = {};
+const waiting = {}; // goal → roomId (nếu có người đang chờ)
 
 // API POST /match
 app.post("/match", (req, res) => {
   const { goal } = req.body;
-  const roomId = matchGoal(goal);
-  const isCaller = rooms[roomId].length === 1;
-  console.log(`🎯 ${goal} → room: ${roomId}, isCaller: ${isCaller}`);
-  res.json({ roomId, isCaller });
-});
 
-// Hàm tìm hoặc tạo phòng có cùng mục tiêu
-function matchGoal(goal) {
-  for (const [roomId, clients] of Object.entries(rooms)) {
-    if (clients.length === 1 && clients[0].goal === goal) {
-      console.log(`🔁 Found existing room for goal "${goal}": ${roomId}`);
-      return roomId;
-    }
+  // Nếu đã có người chờ cùng goal → ghép cặp vào cùng phòng đó
+  if (waiting[goal]) {
+    const roomId = waiting[goal];
+    delete waiting[goal];
+    console.log(`🔁 Found waiting room for goal "${goal}": ${roomId}`);
+    res.json({ roomId, isCaller: false });
+    return;
   }
+
+  // Nếu chưa có ai chờ → tạo phòng mới và đánh dấu đang chờ
   const newRoomId = uuidv4();
-  rooms[newRoomId] = [];
+  waiting[goal] = newRoomId;
+  rooms[newRoomId] = { goal, clients: [] };
   console.log(`🆕 Created new room for goal "${goal}": ${newRoomId}`);
-  return newRoomId;
-}
+  res.json({ roomId: newRoomId, isCaller: true });
+});
 
 // Tạo HTTP server
 const server = http.createServer(app);
@@ -39,33 +39,28 @@ const server = http.createServer(app);
 // Tạo WebSocket server
 const wss = new WebSocket.Server({ server });
 
-// Xử lý WebSocket kết nối
+// Khi có client kết nối WebSocket
 wss.on("connection", (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = url.searchParams.get("roomId");
 
-  console.log("✅ New connection, room:", roomId);
-
-  if (!roomId) {
+  if (!roomId || !rooms[roomId]) {
     ws.close();
     return;
   }
 
-  if (!rooms[roomId]) {
-    rooms[roomId] = [];
-  }
-
-  // ❗ Gán goal cho client
   ws.roomId = roomId;
-  ws.goal = findGoalByRoom(roomId);
-  rooms[roomId].push(ws);
+  const room = rooms[roomId];
+  room.clients.push(ws);
 
-  console.log(`👥 Clients in room ${roomId}: ${rooms[roomId].length}`);
+  console.log(`✅ New connection, goal "${room.goal}", room: ${roomId}`);
+  console.log(`👥 Clients in room ${roomId}: ${room.clients.length}`);
 
+  // Khi nhận được tín hiệu WebRTC
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
-      const others = rooms[roomId].filter(
+      const others = room.clients.filter(
         (client) => client !== ws && client.readyState === WebSocket.OPEN
       );
       for (const client of others) {
@@ -76,24 +71,17 @@ wss.on("connection", (ws, req) => {
     }
   });
 
+  // Khi client rời đi
   ws.on("close", () => {
-    rooms[roomId] = rooms[roomId].filter((client) => client !== ws);
-    if (rooms[roomId].length === 0) {
+    room.clients = room.clients.filter((c) => c !== ws);
+    console.log(`❌ Client left room ${roomId}`);
+
+    if (room.clients.length === 0) {
       delete rooms[roomId];
-      console.log("🗑️ Room deleted:", roomId);
-    } else {
-      console.log(`👋 Client left room ${roomId}`);
+      console.log(`🗑️ Room deleted: ${roomId}`);
     }
   });
 });
-
-// Hàm phụ — tìm goal của room
-function findGoalByRoom(roomId) {
-  for (const [goal, clients] of Object.entries(rooms)) {
-    if (rooms[goal] === roomId && clients.length > 0) return clients[0].goal;
-  }
-  return null;
-}
 
 // Khởi động server
 const PORT = process.env.PORT || 8000;
