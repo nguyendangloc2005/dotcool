@@ -20,7 +20,7 @@ async function findMatch() {
   }
 
   // Gửi mục tiêu đến server để match (gọi API backend)
-  const response = await fetch("https://dotcool-backend.onrender.com/match/", {
+  const response = await fetch("https://dotcool-back2.onrender.com/match/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ goal }),
@@ -45,7 +45,7 @@ async function startWebRTC(isCaller, roomId) {
   };
 
   // Sử dụng WebSocket qua WSS (bắt buộc vì đang dùng HTTPS)
-const socket = new WebSocket("wss://dotcool-backend.onrender.com/ws?roomId=" + roomId);
+const socket = new WebSocket("wss://dotcool-back2.onrender.com/ws?roomId=" + roomId);
 
 
   socket.onmessage = async ({ data }) => {
