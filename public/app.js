@@ -1,126 +1,93 @@
-// === DOM ===
+const backendUrl = "https://dotcool-back2.onrender.com"; // ⚠️ sửa thành backend Render URL của bạn
 const localVideo = document.getElementById("localVideo");
 const remoteVideo = document.getElementById("remoteVideo");
-let localStream;
-let peerConnection;
+const goalInput = document.getElementById("goal");
+const startButton = document.getElementById("startBtn");
+
 let socket;
+let peerConnection;
 
-// === BẮT ĐẦU TÌM NGƯỜI ===
-async function findMatch() {
-  const goal = document.getElementById("goalInput").value.trim();
-  if (!goal) {
-    alert("Hãy nhập mục tiêu của bạn!");
-    return;
-  }
+const iceServers = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+  ],
+};
 
-  try {
-    // 🔹 Lấy camera & mic
-    localStream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true,
-    });
-    localVideo.srcObject = localStream;
-  } catch (err) {
-    alert("Không thể truy cập camera hoặc micro: " + err.message);
-    return;
-  }
+startButton.onclick = async () => {
+  const goal = goalInput.value.trim();
+  if (!goal) return alert("Vui lòng nhập mục tiêu!");
 
-  // 🔹 Gửi mục tiêu đến server Render (API backend)
-  const response = await fetch("https://dotcool-back2.onrender.com/match", {
+  // Gửi yêu cầu match lên backend
+  const res = await fetch(`${backendUrl}/match`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ goal }),
   });
+  const { roomId } = await res.json();
 
-  const { roomId, isCaller } = await response.json();
-  console.log("🎯 Kết nối với room:", roomId, "| Caller:", isCaller);
+  console.log("🎯 Kết nối với room:", roomId);
 
-  // 🔹 Bắt đầu WebRTC
-  startWebRTC(isCaller, roomId);
-}
+  // Kết nối WebSocket
+  socket = new WebSocket(backendUrl.replace("https", "wss"));
 
-// === KHỞI TẠO KẾT NỐI WEBRTC ===
-async function startWebRTC(isCaller, roomId) {
-  // 🔹 Thêm STUN + TURN server để hoạt động qua Internet
-  peerConnection = new RTCPeerConnection({
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302" },
-      {
-        urls: "turn:relay.metered.ca:80",
-        username: "openai",
-        credential: "openai",
-      },
-    ],
-  });
-
-  // 🔹 Gửi ICE candidate qua WebSocket
-  peerConnection.onicecandidate = ({ candidate }) => {
-    if (candidate) {
-      socket.send(JSON.stringify({ type: "candidate", candidate }));
-      console.log("📤 Gửi ICE candidate");
-    }
-  };
-
-  // 🔹 Khi nhận được stream từ người kia
-  peerConnection.ontrack = (event) => {
-    console.log("📺 Nhận stream từ người kia");
-    remoteVideo.srcObject = event.streams[0];
-  };
-
-  // 🔹 Thêm local stream vào kết nối
-  localStream.getTracks().forEach((track) => {
-    peerConnection.addTrack(track, localStream);
-  });
-
-  // === KẾT NỐI WEBSOCKET ===
-  socket = new WebSocket(
-    "wss://dotcool-back2.onrender.com?roomId=" + roomId
-  );
-
-  socket.onopen = async () => {
+  socket.onopen = () => {
     console.log("✅ Đã kết nối WebSocket");
-
-    if (isCaller) {
-      // Caller tạo offer
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      socket.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
-      console.log("📤 Gửi offer");
-    }
+    socket.send(JSON.stringify({ type: "join", roomId }));
   };
 
   socket.onmessage = async (event) => {
     const data = JSON.parse(event.data);
-    console.log("📩 Nhận:", data.type || Object.keys(data)[0]);
 
-    if (data.type === "offer") {
-      // Người nhận set offer
-      await peerConnection.setRemoteDescription(
-        new RTCSessionDescription({ type: "offer", sdp: data.sdp })
-      );
+    if (data.type === "ready") {
+      console.log("⚡ Ready signal nhận được:", data);
+      createPeerConnection();
+      if (data.isCaller) {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.send(JSON.stringify({ type: "offer", offer }));
+        console.log("📤 Gửi offer");
+      }
+    } else if (data.type === "offer") {
+      createPeerConnection();
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
-      socket.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
+      socket.send(JSON.stringify({ type: "answer", answer }));
       console.log("📤 Gửi answer");
     } else if (data.type === "answer") {
-      await peerConnection.setRemoteDescription(
-        new RTCSessionDescription({ type: "answer", sdp: data.sdp })
-      );
-      console.log("✅ Đã nhận answer");
-    } else if (data.type === "candidate" && data.candidate) {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+      console.log("📥 Nhận answer");
+    } else if (data.type === "ice" && data.candidate) {
       try {
-        await peerConnection.addIceCandidate(data.candidate);
-        console.log("✅ Thêm ICE candidate");
-      } catch (err) {
-        console.error("Lỗi thêm ICE:", err);
+        await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+        console.log("📥 Thêm ICE candidate");
+      } catch (e) {
+        console.error("❌ Lỗi thêm ICE:", e);
       }
     }
   };
+};
 
-  socket.onclose = () => {
-    console.log("❌ WebSocket đóng kết nối");
+// -------------------- Tạo kết nối WebRTC --------------------
+async function createPeerConnection() {
+  peerConnection = new RTCPeerConnection(iceServers);
+
+  // Khi có ICE candidate mới
+  peerConnection.onicecandidate = (event) => {
+    if (event.candidate && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "ice", candidate: event.candidate }));
+      console.log("📤 Gửi ICE candidate");
+    }
   };
-}
 
-// === GÁN NÚT BẮT ĐẦU ===
-document.getElementById("findBtn").addEventListener("click", findMatch);
+  // Khi nhận track (video/audio từ người kia)
+  peerConnection.ontrack = (event) => {
+    console.log("🎥 Nhận remote stream");
+    remoteVideo.srcObject = event.streams[0];
+  };
+
+  // Lấy camera/mic cục bộ
+  const localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  localVideo.srcObject = localStream;
+  localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
+}
