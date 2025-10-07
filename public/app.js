@@ -2,6 +2,7 @@ const localVideo = document.getElementById("localVideo");
 const remoteVideo = document.getElementById("remoteVideo");
 let localStream, peerConnection, socket;
 
+// STUN + TURN server
 const iceServers = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -17,13 +18,16 @@ async function findMatch() {
   const goal = document.getElementById("goalInput").value.trim();
   if (!goal) return alert("Hãy nhập mục tiêu của bạn.");
 
+  // Lấy media local
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     localVideo.srcObject = localStream;
+    localVideo.play();
   } catch (err) {
     return alert("Không thể truy cập camera/micro: " + err.message);
   }
 
+  // Gọi API match
   const response = await fetch("https://dotcool-back2.onrender.com/match", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -39,10 +43,27 @@ async function findMatch() {
 
 async function startWebRTC(isCaller, roomId) {
   peerConnection = new RTCPeerConnection(iceServers);
-  localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-  peerConnection.ontrack = e => (remoteVideo.srcObject = e.streams[0]);
 
+  // Thêm track vào peerConnection
+  localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+  // Nhận track từ peer
+  peerConnection.ontrack = (event) => {
+    remoteVideo.srcObject = event.streams[0];
+    remoteVideo.play();
+  };
+
+  // ICE candidate
+  peerConnection.onicecandidate = ({ candidate }) => {
+    if (candidate && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ iceCandidate: candidate }));
+      console.log("📤 Gửi ICE candidate");
+    }
+  };
+
+  // WebSocket signaling
   socket = new WebSocket(`wss://dotcool-back2.onrender.com/ws?roomId=${roomId}`);
+
   socket.onopen = async () => {
     console.log("✅ WebSocket đã kết nối");
     if (isCaller) {
@@ -55,6 +76,7 @@ async function startWebRTC(isCaller, roomId) {
 
   socket.onmessage = async ({ data }) => {
     const msg = JSON.parse(data);
+
     if (msg.offer) {
       await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
       const answer = await peerConnection.createAnswer();
@@ -71,13 +93,6 @@ async function startWebRTC(isCaller, roomId) {
       } catch (err) {
         console.error("Lỗi ICE:", err);
       }
-    }
-  };
-
-  peerConnection.onicecandidate = ({ candidate }) => {
-    if (candidate && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ iceCandidate: candidate }));
-      console.log("📤 Gửi ICE candidate");
     }
   };
 
