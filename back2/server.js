@@ -1,90 +1,97 @@
 const express = require("express");
 const http = require("http");
-const WebSocket = require("ws");
-const { v4: uuidv4 } = require("uuid");
 const cors = require("cors");
+const { v4: uuidv4 } = require("uuid");
+const WebSocket = require("ws");
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 app.use(express.json());
 
-// Mỗi phòng chứa danh sách client WebSocket và goal chung
-const rooms = {};
-const waiting = {}; // goal → roomId (nếu có người đang chờ)
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
-// API POST /match
+const PORT = process.env.PORT || 10000;
+
+// Map: roomId -> array of clients
+const rooms = {};
+// Map: goal -> waiting roomId
+const waitingRooms = {};
+
+// HTTP endpoint để match người dùng
 app.post("/match", (req, res) => {
   const { goal } = req.body;
 
-  // Nếu đã có người chờ cùng goal → ghép cặp vào cùng phòng đó
-  if (waiting[goal]) {
-    const roomId = waiting[goal];
-    delete waiting[goal];
+  if (!goal) return res.status(400).json({ error: "Missing goal" });
+
+  let roomId;
+
+  if (waitingRooms[goal] && rooms[waitingRooms[goal]].length < 2) {
+    roomId = waitingRooms[goal];
     console.log(`🔁 Found waiting room for goal "${goal}": ${roomId}`);
-    res.json({ roomId, isCaller: false });
-    return;
+  } else {
+    roomId = uuidv4();
+    waitingRooms[goal] = roomId;
+    rooms[roomId] = [];
+    console.log(`🆕 Created new room for goal "${goal}": ${roomId}`);
   }
 
-  // Nếu chưa có ai chờ → tạo phòng mới và đánh dấu đang chờ
-  const newRoomId = uuidv4();
-  waiting[goal] = newRoomId;
-  rooms[newRoomId] = { goal, clients: [] };
-  console.log(`🆕 Created new room for goal "${goal}": ${newRoomId}`);
-  res.json({ roomId: newRoomId, isCaller: true });
+  res.json({ roomId });
 });
 
-// Tạo HTTP server
-const server = http.createServer(app);
-
-// Tạo WebSocket server
-const wss = new WebSocket.Server({ server });
-
-// Khi có client kết nối WebSocket
-wss.on("connection", (ws, req) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const roomId = url.searchParams.get("roomId");
-
-  if (!roomId || !rooms[roomId]) {
-    ws.close();
-    return;
-  }
-
-  ws.roomId = roomId;
-  const room = rooms[roomId];
-  room.clients.push(ws);
-
-  console.log(`✅ New connection, goal "${room.goal}", room: ${roomId}`);
-  console.log(`👥 Clients in room ${roomId}: ${room.clients.length}`);
-
-  // Khi nhận được tín hiệu WebRTC
+// WebSocket signaling server
+wss.on("connection", (ws) => {
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
-      const others = room.clients.filter(
-        (client) => client !== ws && client.readyState === WebSocket.OPEN
-      );
-      for (const client of others) {
-        client.send(JSON.stringify(data));
+
+      if (data.type === "join") {
+        const { roomId } = data;
+        if (!rooms[roomId]) rooms[roomId] = [];
+
+        ws.roomId = roomId;
+        rooms[roomId].push(ws);
+        console.log(`✅ New connection, room: ${roomId}`);
+        console.log(`👥 Clients in room ${roomId}: ${rooms[roomId].length}`);
+
+        // Nếu đủ 2 người → gửi tín hiệu bắt đầu kết nối
+        if (rooms[roomId].length === 2) {
+          rooms[roomId].forEach((client, index) => {
+            client.send(JSON.stringify({ type: "ready", isCaller: index === 0 }));
+          });
+        }
+      }
+
+      // relay offer/answer/ice
+      else if (["offer", "answer", "ice"].includes(data.type)) {
+        const roomId = ws.roomId;
+        if (!roomId || !rooms[roomId]) return;
+
+        rooms[roomId].forEach((client) => {
+          if (client !== ws && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify(data));
+          }
+        });
       }
     } catch (err) {
-      console.error("❌ Error parsing message:", err.message);
+      console.error("❌ WS message error:", err);
     }
   });
 
-  // Khi client rời đi
   ws.on("close", () => {
-    room.clients = room.clients.filter((c) => c !== ws);
-    console.log(`❌ Client left room ${roomId}`);
+    const { roomId } = ws;
+    if (roomId && rooms[roomId]) {
+      rooms[roomId] = rooms[roomId].filter((c) => c !== ws);
+      console.log(`❌ Client left room ${roomId}`);
 
-    if (room.clients.length === 0) {
-      delete rooms[roomId];
-      console.log(`🗑️ Room deleted: ${roomId}`);
+      if (rooms[roomId].length === 0) {
+        delete rooms[roomId];
+        console.log(`🗑️ Room deleted: ${roomId}`);
+      }
     }
   });
 });
 
-// Khởi động server
-const PORT = process.env.PORT || 8000;
 server.listen(PORT, () => {
   console.log(`✅ Backend WebSocket server running on port ${PORT}`);
 });
