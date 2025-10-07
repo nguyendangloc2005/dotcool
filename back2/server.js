@@ -1,70 +1,76 @@
-const express = require("express");
+// server.js
 const http = require("http");
 const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
-const cors = require("cors");
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+const server = http.createServer();
+const wss = new WebSocket.Server({ server });
 
-const rooms = {}; // roomId -> [clients]
-const waitingByGoal = {}; // goal -> roomId đang đợi
+const rooms = {}; // { goal: { roomId, clients: [] } }
 
-// API POST /match
-app.post("/match", (req, res) => {
-  const { goal } = req.body;
-  if (!goal) return res.status(400).json({ error: "Thiếu goal" });
-
-  let roomId;
-
-  // Nếu đã có người đang chờ cùng goal
-  if (waitingByGoal[goal]) {
-    roomId = waitingByGoal[goal];
-    delete waitingByGoal[goal];
-    console.log(`🔁 Found waiting room for goal "${goal}": ${roomId}`);
-    res.json({ roomId, isCaller: false });
-  } else {
-    // Tạo phòng mới
-    roomId = uuidv4();
-    waitingByGoal[goal] = roomId;
-    rooms[roomId] = [];
-    console.log(`🆕 Created new room for goal "${goal}": ${roomId}`);
-    res.json({ roomId, isCaller: true });
-  }
-});
-
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server, path: "/ws" });
-
-wss.on("connection", (ws, req) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const roomId = url.searchParams.get("roomId");
-
-  if (!roomId) return ws.close();
-
-  if (!rooms[roomId]) rooms[roomId] = [];
-  rooms[roomId].push(ws);
-  console.log(`✅ New connection to room: ${roomId}`);
-  console.log(`👥 Clients in room ${roomId}: ${rooms[roomId].length}`);
-
+wss.on("connection", (ws) => {
   ws.on("message", (msg) => {
-    const data = JSON.parse(msg);
-    const others = rooms[roomId].filter(c => c !== ws && c.readyState === WebSocket.OPEN);
-    others.forEach(client => client.send(JSON.stringify(data)));
+    try {
+      const data = JSON.parse(msg);
+
+      // Khi client gửi { goal }
+      if (data.goal) {
+        let goalRoom = Object.values(rooms).find(
+          (r) => r.goal === data.goal && r.clients.length < 2
+        );
+
+        if (!goalRoom) {
+          const newRoomId = uuidv4();
+          rooms[newRoomId] = { goal: data.goal, clients: [ws] };
+          ws.roomId = newRoomId;
+          ws.isCaller = true;
+          console.log(`🆕 Created new room for goal "${data.goal}": ${newRoomId}`);
+        } else {
+          goalRoom.clients.push(ws);
+          ws.roomId = Object.keys(rooms).find((id) => rooms[id] === goalRoom);
+          ws.isCaller = false;
+          console.log(`🔁 Found waiting room for goal "${data.goal}": ${ws.roomId}`);
+        }
+
+        ws.send(JSON.stringify({
+          type: "joined",
+          roomId: ws.roomId,
+          isCaller: ws.isCaller
+        }));
+
+        console.log(`✅ New connection to room: ${ws.roomId}`);
+        console.log(`👥 Clients in room ${ws.roomId}: ${rooms[ws.roomId].clients.length}`);
+        return;
+      }
+
+      // Truyền tín hiệu WebRTC giữa 2 client trong cùng room
+      const room = rooms[ws.roomId];
+      if (room && room.clients.length === 2) {
+        room.clients.forEach(client => {
+          if (client !== ws && client.readyState === WebSocket.OPEN) {
+            client.send(msg);
+          }
+        });
+      }
+
+    } catch (err) {
+      console.error("❌ Error:", err);
+    }
   });
 
   ws.on("close", () => {
-    if (!rooms[roomId]) return;
-    rooms[roomId] = rooms[roomId].filter(c => c !== ws);
-    if (rooms[roomId].length === 0) {
-      delete rooms[roomId];
-      console.log(`🗑️ Room deleted: ${roomId}`);
-    } else {
+    const roomId = ws.roomId;
+    if (roomId && rooms[roomId]) {
+      rooms[roomId].clients = rooms[roomId].clients.filter(c => c !== ws);
       console.log(`❌ Client left room ${roomId}`);
+      if (rooms[roomId].clients.length === 0) {
+        delete rooms[roomId];
+        console.log(`🗑️ Room deleted: ${roomId}`);
+      }
     }
   });
 });
 
-const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => console.log(`✅ Backend WebSocket server running on port ${PORT}`));
+server.listen(10000, () => {
+  console.log("✅ Backend WebSocket server running on port 10000");
+});
