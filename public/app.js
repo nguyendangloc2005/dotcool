@@ -1,4 +1,4 @@
-// app.js
+// frontend/app.js
 const goal = prompt("Nhập mục tiêu để kết nối:");
 const socket = new WebSocket("wss://dotcool-back2.onrender.com");
 let peerConnection;
@@ -7,13 +7,13 @@ const pendingCandidates = [];
 
 const servers = {
   iceServers: [
-    { urls: "stun:stun.l.google.com:19302" }, // STUN miễn phí của Google
+    { urls: "stun:stun.l.google.com:19302" },
     {
-      urls: "turn:relay1.expressturn.com:3478", // TURN công khai miễn phí
+      urls: "turn:relay1.expressturn.com:3478",
       username: "efree",
-      credential: "efree"
-    }
-  ]
+      credential: "efree",
+    },
+  ],
 };
 
 socket.onopen = () => {
@@ -27,8 +27,7 @@ socket.onmessage = async (event) => {
   if (msg.type === "joined") {
     console.log(`🎯 Kết nối với room: ${msg.roomId} | Caller: ${msg.isCaller}`);
     await startCall(msg.isCaller);
-  } 
-  else if (msg.offer) {
+  } else if (msg.offer) {
     console.log("📩 Nhận offer");
     await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
     const answer = await peerConnection.createAnswer();
@@ -38,15 +37,15 @@ socket.onmessage = async (event) => {
     while (pendingCandidates.length) {
       await peerConnection.addIceCandidate(pendingCandidates.shift());
     }
-  } 
-  else if (msg.answer) {
+  } else if (msg.answer) {
     console.log("📩 Nhận answer");
     await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.answer));
-  } 
-  else if (msg.iceCandidate) {
+  } else if (msg.iceCandidate) {
     console.log("📩 Nhận ICE candidate");
     if (peerConnection.remoteDescription && peerConnection.remoteDescription.type) {
-      await peerConnection.addIceCandidate(msg.iceCandidate).catch(err => console.error("Lỗi ICE:", err));
+      await peerConnection
+        .addIceCandidate(msg.iceCandidate)
+        .catch((err) => console.error("Lỗi ICE:", err));
     } else {
       pendingCandidates.push(msg.iceCandidate);
     }
@@ -56,17 +55,15 @@ socket.onmessage = async (event) => {
 async function startCall(isCaller) {
   peerConnection = new RTCPeerConnection(servers);
 
-  // Lấy camera/mic
+  // Lấy camera + mic
   localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
   document.getElementById("localVideo").srcObject = localStream;
-  localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+  localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
 
-  // Khi nhận stream từ đối phương
   peerConnection.ontrack = (event) => {
     document.getElementById("remoteVideo").srcObject = event.streams[0];
   };
 
-  // Gửi ICE
   peerConnection.onicecandidate = (event) => {
     if (event.candidate) {
       socket.send(JSON.stringify({ iceCandidate: event.candidate }));
@@ -74,7 +71,6 @@ async function startCall(isCaller) {
     }
   };
 
-  // Nếu là caller thì tạo offer
   if (isCaller) {
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
