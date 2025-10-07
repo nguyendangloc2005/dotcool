@@ -1,4 +1,4 @@
-// server.js
+// backend/server.js
 const http = require("http");
 const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
@@ -32,27 +32,30 @@ wss.on("connection", (ws) => {
           console.log(`🔁 Found waiting room for goal "${data.goal}": ${ws.roomId}`);
         }
 
-        ws.send(JSON.stringify({
-          type: "joined",
-          roomId: ws.roomId,
-          isCaller: ws.isCaller
-        }));
+        ws.send(
+          JSON.stringify({
+            type: "joined",
+            roomId: ws.roomId,
+            isCaller: ws.isCaller,
+          })
+        );
 
         console.log(`✅ New connection to room: ${ws.roomId}`);
-        console.log(`👥 Clients in room ${ws.roomId}: ${rooms[ws.roomId].clients.length}`);
+        console.log(
+          `👥 Clients in room ${ws.roomId}: ${rooms[ws.roomId].clients.length}`
+        );
         return;
       }
 
-      // Truyền tín hiệu WebRTC giữa 2 client trong cùng room
+      // Truyền tín hiệu WebRTC
       const room = rooms[ws.roomId];
       if (room && room.clients.length === 2) {
-        room.clients.forEach(client => {
+        room.clients.forEach((client) => {
           if (client !== ws && client.readyState === WebSocket.OPEN) {
             client.send(msg);
           }
         });
       }
-
     } catch (err) {
       console.error("❌ Error:", err);
     }
@@ -61,7 +64,7 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     const roomId = ws.roomId;
     if (roomId && rooms[roomId]) {
-      rooms[roomId].clients = rooms[roomId].clients.filter(c => c !== ws);
+      rooms[roomId].clients = rooms[roomId].clients.filter((c) => c !== ws);
       console.log(`❌ Client left room ${roomId}`);
       if (rooms[roomId].clients.length === 0) {
         delete rooms[roomId];
