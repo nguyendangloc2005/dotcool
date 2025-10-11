@@ -3,8 +3,9 @@ const remoteVideo = document.getElementById("remoteVideo");
 let localStream;
 let peerConnection;
 let socket;
+let isCallerGlobal = false;
 
-// TURN + STUN servers
+// TURN + STUN
 const iceServers = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -12,14 +13,6 @@ const iceServers = {
       urls: "turn:openrelay.metered.ca:80",
       username: "openrelayproject",
       credential: "openrelayproject",
-    },
-    {
-      urls: [
-        "turn:relay1.expressturn.com:3478",
-        "turns:relay1.expressturn.com:5349",
-      ],
-      username: "ef5e8e68f7b4f0d0b7360b33",
-      credential: "aS7uKzEot0z+9P5y",
     },
   ],
 };
@@ -29,7 +22,6 @@ async function findMatch() {
   if (!goal) return alert("Hãy nhập mục tiêu của bạn.");
 
   try {
-    // Truy cập camera/mic
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     localVideo.srcObject = localStream;
   } catch (err) {
@@ -37,7 +29,6 @@ async function findMatch() {
   }
 
   try {
-    // Gọi API backend
     const response = await fetch("https://dotcool-back2.onrender.com/match", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -45,6 +36,7 @@ async function findMatch() {
     });
 
     const { roomId, isCaller } = await response.json();
+    isCallerGlobal = isCaller;
     console.log(`🎯 Kết nối với room: ${roomId} | Caller: ${isCaller}`);
     startWebRTC(isCaller, roomId);
   } catch (err) {
@@ -55,47 +47,31 @@ async function findMatch() {
 async function startWebRTC(isCaller, roomId) {
   peerConnection = new RTCPeerConnection(iceServers);
 
-  // Gửi local stream lên
   localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
-  // Nhận luồng từ bên kia
   peerConnection.ontrack = event => {
     remoteVideo.srcObject = event.streams[0];
     console.log("📺 Nhận video từ đối phương");
   };
 
-  // ICE candidate
-  peerConnection.onicecandidate = ({ candidate }) => {
-    if (candidate && socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ iceCandidate: candidate }));
-      console.log("📤 Gửi ICE candidate");
-    }
-  };
-
-  // ICE status debug
   peerConnection.onconnectionstatechange = () => {
     console.log("🌐 ICE state:", peerConnection.connectionState);
   };
 
-  // Kết nối WebSocket
   socket = new WebSocket(`wss://dotcool-back2.onrender.com/ws?roomId=${roomId}`);
 
-  socket.onopen = async () => {
-    console.log("✅ WebSocket đã kết nối");
-
-    // Delay nhỏ để đảm bảo 2 bên sẵn sàng
-    setTimeout(async () => {
-      if (isCaller) {
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        socket.send(JSON.stringify({ offer }));
-        console.log("📤 Gửi offer");
-      }
-    }, 1500);
-  };
+  socket.onopen = () => console.log("✅ WebSocket đã kết nối");
 
   socket.onmessage = async ({ data }) => {
     const msg = JSON.parse(data);
+
+    if (msg.ready && isCallerGlobal) {
+      console.log("🚀 Phòng đã sẵn sàng, tạo offer");
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      socket.send(JSON.stringify({ offer }));
+      console.log("📤 Gửi offer");
+    }
 
     if (msg.offer) {
       console.log("📩 Nhận offer");
@@ -114,6 +90,13 @@ async function startWebRTC(isCaller, roomId) {
       } catch (err) {
         console.error("⚠️ Lỗi ICE:", err);
       }
+    }
+  };
+
+  peerConnection.onicecandidate = ({ candidate }) => {
+    if (candidate && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ iceCandidate: candidate }));
+      console.log("📤 Gửi ICE candidate");
     }
   };
 
