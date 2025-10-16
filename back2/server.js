@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.json());
 
 // 🧠 URL AI server (qua Cloudflare tunnel)
-const AI_URL = "https://spy-titles-none-tried.trycloudflare.com/match";
+const AI_URL = "https://activity-april-betting-trail.trycloudflare.com";
 
 const rooms = {};              // roomId -> [WebSocket clients]
 const waitingUsers = [];       // danh sách người chờ: { goal, roomId }
