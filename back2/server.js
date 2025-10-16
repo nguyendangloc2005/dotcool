@@ -10,25 +10,24 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🧠 URL AI server (tunnel public)
-const AI_URL = "https://spy-titles-none-tried.trycloudflare.com";
+// 🧠 URL AI server (qua Cloudflare tunnel)
+const AI_URL = "https://spy-titles-none-tried.trycloudflare.com/match";
 
 const rooms = {};              // roomId -> [WebSocket clients]
-const waitingUsers = [];       // Danh sách người đang chờ: { goal, roomId }
+const waitingUsers = [];       // danh sách người chờ: { goal, roomId }
 
 // =============================
-// 🧩 API POST /match
+// 🧩 POST /match — ghép người
 // =============================
 app.post("/match", async (req, res) => {
   const { goal } = req.body;
   if (!goal) return res.status(400).json({ error: "Thiếu goal" });
 
-  // Nếu có người đang chờ, thử xem ai có goal tương tự nhất
+  // Nếu đã có người đang chờ, dùng AI để tìm người giống nhất
   if (waitingUsers.length > 0) {
     let bestMatch = null;
-    let bestScore = 0.0;
+    let bestScore = 0;
 
-    // Duyệt qua từng người đang chờ → tính độ tương đồng bằng AI server
     for (const user of waitingUsers) {
       try {
         const response = await fetch(AI_URL, {
@@ -36,38 +35,38 @@ app.post("/match", async (req, res) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ goals: [goal, user.goal] }),
         });
-        const result = await response.json();
-        const score = result.similarity_score || 0;
-        console.log(`🤖 So sánh "${goal}" vs "${user.goal}" → điểm ${score}`);
+        const data = await response.json();
+        const score = data.similarity_score || 0;
+        console.log(`🧠 So sánh "${goal}" vs "${user.goal}" = ${score}`);
 
         if (score > bestScore) {
           bestScore = score;
           bestMatch = user;
         }
       } catch (err) {
-        console.error("❌ Lỗi khi gọi AI server:", err);
+        console.error("❌ Lỗi gọi AI:", err);
       }
     }
 
-    // Nếu có người phù hợp (>=0.7 chẳng hạn) → ghép
+    // Nếu tìm được người phù hợp
     if (bestMatch && bestScore >= 0.7) {
       const roomId = bestMatch.roomId;
       waitingUsers.splice(waitingUsers.indexOf(bestMatch), 1);
-      console.log(`🔗 Ghép thành công giữa "${goal}" và "${bestMatch.goal}" | roomId: ${roomId}`);
+      console.log(`🤝 Ghép "${goal}" với "${bestMatch.goal}" (score=${bestScore})`);
       return res.json({ roomId, isCaller: false });
     }
   }
 
-  // Nếu không tìm được ai phù hợp → tạo phòng mới, đợi
+  // Nếu không có ai tương tự → tạo phòng chờ mới
   const roomId = uuidv4();
   waitingUsers.push({ goal, roomId });
   rooms[roomId] = [];
-  console.log(`🆕 Tạo phòng mới cho goal "${goal}": ${roomId}`);
+  console.log(`🆕 Tạo phòng chờ mới cho "${goal}": ${roomId}`);
   res.json({ roomId, isCaller: true });
 });
 
 // =============================
-// ⚡ WebSocket Signaling
+// ⚡ WebSocket signaling
 // =============================
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: "/ws" });
@@ -79,16 +78,15 @@ wss.on("connection", (ws, req) => {
 
   if (!rooms[roomId]) rooms[roomId] = [];
   rooms[roomId].push(ws);
-  console.log(`✅ New connection to room: ${roomId}`);
-  console.log(`👥 Clients in room ${roomId}: ${rooms[roomId].length}`);
+  console.log(`✅ Kết nối mới tới room: ${roomId}`);
+  console.log(`👥 Room ${roomId} có ${rooms[roomId].length} client`);
 
-  // Khi phòng đủ 2 người
   if (rooms[roomId].length === 2) {
     rooms[roomId].forEach(client => {
       if (client.readyState === WebSocket.OPEN)
         client.send(JSON.stringify({ ready: true }));
     });
-    console.log(`🚀 Room ${roomId} is ready for call`);
+    console.log(`🚀 Room ${roomId} sẵn sàng gọi video`);
   }
 
   ws.on("message", (msg) => {
@@ -102,15 +100,15 @@ wss.on("connection", (ws, req) => {
     rooms[roomId] = rooms[roomId].filter(c => c !== ws);
     if (rooms[roomId].length === 0) {
       delete rooms[roomId];
-      console.log(`🗑️ Room deleted: ${roomId}`);
+      console.log(`🗑️ Room ${roomId} đã xóa`);
     } else {
-      console.log(`❌ Client left room ${roomId}`);
+      console.log(`❌ Client rời khỏi room ${roomId}`);
     }
   });
 });
 
 // =============================
-// 🚀 Khởi chạy server
+// 🚀 Khởi chạy
 // =============================
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => console.log(`✅ Backend WebSocket server running on port ${PORT}`));
