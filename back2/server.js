@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.json());
 
 // 🧠 URL AI server (tunnel public)
-const AI_URL = "https://ladder-lucy-comedy-committees.trycloudflare.com/match";
+const AI_URL = "https://variation-toward-dinner-country.trycloudflare.com";
 
 const rooms = {};              // roomId -> [WebSocket clients]
 const waitingUsers = [];       // Danh sách người đang chờ: { goal, roomId }
