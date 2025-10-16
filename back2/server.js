@@ -4,13 +4,18 @@ const http = require("http");
 const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
 const cors = require("cors");
-const fetch = require("node-fetch"); // cần thêm: npm install node-fetch
+const fetch = require("node-fetch"); // Đã thêm: cần chạy npm install node-fetch@2 (phiên bản CommonJS)
+
+// Lưu ý: Nếu dự án dùng ES Modules ("type": "module" trong package.json), hãy dùng:
+// import fetch from 'node-fetch';
+// Và cài node-fetch@3: npm install node-fetch@3
+// Nhưng code hiện tại dùng require (CommonJS), nên dùng node-fetch@2.
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🧠 URL AI server (qua Cloudflare tunnel)
+// 🧠 URL AI server (qua Cloudflare tunnel) - Hãy đảm bảo URL này ổn định và AI endpoint trả về { similarity_score: number }
 const AI_URL = "https://activity-april-betting-trail.trycloudflare.com";
 
 const rooms = {};              // roomId -> [WebSocket clients]
@@ -30,11 +35,22 @@ app.post("/match", async (req, res) => {
 
     for (const user of waitingUsers) {
       try {
+        // Thêm timeout để tránh treo nếu AI server chậm hoặc lỗi mạng
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // Timeout 10 giây
+
         const response = await fetch(AI_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ goals: [goal, user.goal] }),
+          signal: controller.signal, // Hỗ trợ abort nếu timeout
         });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`AI server error: ${response.status}`);
+        }
+
         const data = await response.json();
         const score = data.similarity_score || 0;
         console.log(`🧠 So sánh "${goal}" vs "${user.goal}" = ${score}`);
@@ -44,11 +60,12 @@ app.post("/match", async (req, res) => {
           bestMatch = user;
         }
       } catch (err) {
-        console.error("❌ Lỗi gọi AI:", err);
+        console.error("❌ Lỗi gọi AI:", err.message || err);
+        // Tiếp tục với user tiếp theo nếu lỗi
       }
     }
 
-    // Nếu tìm được người phù hợp
+    // Nếu tìm được người phù hợp (ngưỡng 0.7, có thể điều chỉnh)
     if (bestMatch && bestScore >= 0.7) {
       const roomId = bestMatch.roomId;
       waitingUsers.splice(waitingUsers.indexOf(bestMatch), 1);
@@ -90,9 +107,13 @@ wss.on("connection", (ws, req) => {
   }
 
   ws.on("message", (msg) => {
-    const data = JSON.parse(msg);
-    const others = rooms[roomId].filter(c => c !== ws && c.readyState === WebSocket.OPEN);
-    others.forEach(client => client.send(JSON.stringify(data)));
+    try {
+      const data = JSON.parse(msg);
+      const others = rooms[roomId].filter(c => c !== ws && c.readyState === WebSocket.OPEN);
+      others.forEach(client => client.send(JSON.stringify(data)));
+    } catch (err) {
+      console.error("Lỗi parse message WebSocket:", err);
+    }
   });
 
   ws.on("close", () => {
@@ -100,6 +121,9 @@ wss.on("connection", (ws, req) => {
     rooms[roomId] = rooms[roomId].filter(c => c !== ws);
     if (rooms[roomId].length === 0) {
       delete rooms[roomId];
+      // Xóa phòng khỏi waitingUsers nếu còn (tránh rò rỉ)
+      const waitingIndex = waitingUsers.findIndex(u => u.roomId === roomId);
+      if (waitingIndex !== -1) waitingUsers.splice(waitingIndex, 1);
       console.log(`🗑️ Room ${roomId} đã xóa`);
     } else {
       console.log(`❌ Client rời khỏi room ${roomId}`);
