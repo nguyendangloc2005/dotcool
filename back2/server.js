@@ -4,7 +4,8 @@ const http = require("http");
 const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
 const cors = require("cors");
-const fetch = require("node-fetch"); // Đã thêm: cần chạy npm install node-fetch@2 (phiên bản CommonJS)
+import fetch from "node-fetch";
+ // Đã thêm: cần chạy npm install node-fetch@2 (phiên bản CommonJS)
 
 // Lưu ý: Nếu dự án dùng ES Modules ("type": "module" trong package.json), hãy dùng:
 // import fetch from 'node-fetch';
