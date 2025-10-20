@@ -16,7 +16,7 @@ app.use(cors());
 app.use(express.json());
 
 // 🧠 URL AI server (qua Cloudflare tunnel) - Hãy đảm bảo URL này ổn định và AI endpoint trả về { similarity_score: number }
-const AI_URL = "https://activity-april-betting-trail.trycloudflare.com";
+const AI_URL = "https://crucial-battle-protein-costa.trycloudflare.com";
 
 const rooms = {};              // roomId -> [WebSocket clients]
 const waitingUsers = [];       // danh sách người chờ: { goal, roomId }
