@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 // 🔗 URL AI server của bạn (qua Cloudflare Tunnel)
-const AI_URL = "https://places-celebrate-chain-mention.trycloudflare.com";
+const AI_URL = "https://presidential-birds-decisions-perspective.trycloudflare.com";
 
 const rooms = {}; // roomId -> [WebSocket clients]
 const waitingUsers = []; // Danh sách người đang chờ: { goal, roomId }
