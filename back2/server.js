@@ -4,6 +4,20 @@ import { WebSocketServer } from "ws";
 import { v4 as uuidv4 } from "uuid";
 import cors from "cors";
 import fetch from "node-fetch"; // Import fetch ESM
+import pkg from "pg";
+const { Pool } = pkg;
+
+// =============================
+// 🧩 Kết nối PostgreSQL
+// =============================
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+pool.connect()
+  .then(() => console.log("✅ PostgreSQL connected"))
+  .catch(err => console.error("❌ PostgreSQL connection error:", err));
 
 const app = express();
 app.use(cors());
@@ -13,7 +27,7 @@ app.use(express.json());
 const AI_URL = "https://presidential-birds-decisions-perspective.trycloudflare.com";
 
 const rooms = {}; // roomId -> [WebSocket clients]
-const waitingUsers = []; // Danh sách người đang chờ: { goal, roomId }
+let waitingUsers = []; // Danh sách người đang chờ: { goal, roomId, timestamp }
 
 // =============================
 // 🧩 API POST /match
@@ -21,6 +35,10 @@ const waitingUsers = []; // Danh sách người đang chờ: { goal, roomId }
 app.post("/match", async (req, res) => {
   const { goal } = req.body;
   if (!goal) return res.status(400).json({ error: "Thiếu goal" });
+
+  // 🧹 Dọn người chờ quá 2 phút
+  const now = Date.now();
+  waitingUsers = waitingUsers.filter(u => now - u.timestamp < 120000);
 
   // Nếu có người đang chờ, so sánh qua AI server
   if (waitingUsers.length > 0) {
@@ -53,15 +71,38 @@ app.post("/match", async (req, res) => {
       const roomId = bestMatch.roomId;
       waitingUsers.splice(waitingUsers.indexOf(bestMatch), 1);
       console.log(`🔗 Ghép thành công giữa "${goal}" và "${bestMatch.goal}" | roomId: ${roomId}`);
+
+      // 📦 Lưu vào DB (tuỳ chọn)
+      try {
+        await pool.query(
+          "INSERT INTO matches (room_id, goal_a, goal_b, score, created_at) VALUES ($1, $2, $3, $4, NOW())",
+          [roomId, goal, bestMatch.goal, bestScore]
+        );
+      } catch (dbErr) {
+        console.error("⚠️ Lỗi lưu match vào DB:", dbErr.message);
+      }
+
       return res.json({ roomId, isCaller: false });
     }
   }
 
   // Nếu chưa ai phù hợp, tạo phòng chờ mới
   const roomId = uuidv4();
-  waitingUsers.push({ goal, roomId });
+  waitingUsers.push({ goal, roomId, timestamp: Date.now() });
   rooms[roomId] = [];
+
   console.log(`🆕 Tạo phòng chờ mới cho "${goal}": ${roomId}`);
+
+  // 📦 Lưu vào DB (tuỳ chọn)
+  try {
+    await pool.query(
+      "INSERT INTO waiting_users (room_id, goal, created_at) VALUES ($1, $2, NOW())",
+      [roomId, goal]
+    );
+  } catch (dbErr) {
+    console.error("⚠️ Lỗi lưu người chờ vào DB:", dbErr.message);
+  }
+
   res.json({ roomId, isCaller: true });
 });
 
