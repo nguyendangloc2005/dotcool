@@ -23,7 +23,7 @@ app.use(cors());
 app.use(express.json());
 
 // 🔗 AI server (qua Cloudflare Tunnel)
-const AI_URL = "https://presidential-birds-decisions-perspective.trycloudflare.com";
+const AI_URL = "https://straight-shaved-supplies-shanghai.trycloudflare.com";
 
 // Bộ nhớ tạm (WebSocket)
 const rooms = {}; // roomId -> [WebSocket clients]
