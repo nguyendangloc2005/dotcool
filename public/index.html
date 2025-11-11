@@ -7,15 +7,24 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <h1>Kết nối theo mục tiêu</h1>
-  <input type="text" id="goalInput" placeholder="Nhập mục tiêu..." />
-  <button onclick="findMatch()">Tìm người phù hợp</button>
-
-  <div class="video-container">
-    <video id="localVideo" autoplay muted></video>
-    <video id="remoteVideo" autoplay></video>
+  <!-- USER INFO -->
+  <div class="user-info">
+    <img id="userAvatar" src="" alt="Avatar" />
+    <span id="userName">Đang tải...</span>
+    <button id="logoutBtn" class="btn-logout">Đăng xuất</button>
   </div>
 
-  <script src="app.js"></script>
+  <!-- MAIN CONTENT -->
+  <div class="main-content">
+    <h1>Kết nối theo mục tiêu</h1>
+    <input type="text" id="goalInput" placeholder="Nhập mục tiêu..." />
+    <button onclick="findMatch()">Tìm người phù hợp</button>
+    <div class="video-container">
+      <video id="localVideo" autoplay muted></video>
+      <video id="remoteVideo" autoplay></video>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
 </body>
 </html>
