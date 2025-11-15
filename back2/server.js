@@ -23,7 +23,7 @@ app.use(cors());
 app.use(express.json());
 
 // 🔗 AI server (qua Cloudflare Tunnel)
-const AI_URL = "https://mean-romantic-distinction-reflects.trycloudflare.com";
+const AI_URL = " https://stereo-generator-undertake-casa.trycloudflare.com";
 
 // Bộ nhớ tạm (WebSocket)
 const rooms = {}; // roomId -> [WebSocket clients]
