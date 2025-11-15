@@ -18,9 +18,11 @@ const pool = new Pool({
 
 // Tự động tạo bảng nếu chưa có
 async function runMigration() {
+  const client = await pool.connect();
   try {
-    await pool.query(`
-      -- Bảng users (Firebase UID)
+    console.log("Bắt đầu migration...");
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         firebase_uid TEXT PRIMARY KEY,
         name TEXT,
@@ -28,8 +30,9 @@ async function runMigration() {
         photo_url TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       );
+    `);
 
-      -- Bảng waiting_users
+    await client.query(`
       CREATE TABLE IF NOT EXISTS waiting_users (
         id SERIAL PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(firebase_uid) ON DELETE CASCADE,
@@ -37,8 +40,9 @@ async function runMigration() {
         goal TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
       );
+    `);
 
-      -- Bảng matches
+    await client.query(`
       CREATE TABLE IF NOT EXISTS matches (
         id SERIAL PRIMARY KEY,
         room_id UUID UNIQUE NOT NULL,
@@ -49,18 +53,21 @@ async function runMigration() {
         similarity_score FLOAT DEFAULT 0,
         matched_at TIMESTAMP DEFAULT NOW()
       );
+    `);
 
-      -- Index
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_waiting_room ON waiting_users(room_id);
       CREATE INDEX IF NOT EXISTS idx_waiting_user ON waiting_users(user_id);
     `);
+
     console.log("Migration thành công!");
   } catch (err) {
     console.error("Migration lỗi:", err.message);
+  } finally {
+    client.release();
   }
 }
 runMigration();
-
 // =============================
 // KHỞI TẠO SERVER
 // =============================
