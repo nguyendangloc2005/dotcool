@@ -16,12 +16,13 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
 });
 
-// Tự động tạo bảng nếu chưa có
+// TỰ ĐỘNG TẠO BẢNG KHI KHỞI ĐỘNG
 async function runMigration() {
   const client = await pool.connect();
   try {
     console.log("Bắt đầu migration...");
 
+    // 1. Tạo bảng users
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         firebase_uid TEXT PRIMARY KEY,
@@ -32,6 +33,7 @@ async function runMigration() {
       );
     `);
 
+    // 2. Tạo bảng waiting_users
     await client.query(`
       CREATE TABLE IF NOT EXISTS waiting_users (
         id SERIAL PRIMARY KEY,
@@ -42,6 +44,7 @@ async function runMigration() {
       );
     `);
 
+    // 3. Tạo bảng matches
     await client.query(`
       CREATE TABLE IF NOT EXISTS matches (
         id SERIAL PRIMARY KEY,
@@ -55,6 +58,7 @@ async function runMigration() {
       );
     `);
 
+    // 4. Tạo index
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_waiting_room ON waiting_users(room_id);
       CREATE INDEX IF NOT EXISTS idx_waiting_user ON waiting_users(user_id);
@@ -68,6 +72,7 @@ async function runMigration() {
   }
 }
 runMigration();
+
 // =============================
 // KHỞI TẠO SERVER
 // =============================
@@ -76,7 +81,7 @@ app.use(cors());
 app.use(express.json());
 
 const AI_URL = "https://stereo-generator-undertake-casa.trycloudflare.com";
-const rooms = {}; // roomId -> [WebSocket]
+const rooms = {};
 
 // =============================
 // API /match
@@ -89,16 +94,15 @@ app.post("/match", async (req, res) => {
   }
 
   try {
-    // 1. Đảm bảo user tồn tại
+    // 1. ĐẢM BẢO USER TỒN TẠI (chỉ thêm nếu chưa có)
     await pool.query(
       `INSERT INTO users (firebase_uid, name, email)
        VALUES ($1, $2, $3)
-       ON CONFLICT (firebase_uid) DO UPDATE SET
-       name = EXCLUDED.name, email = EXCLUDED.email`,
+       ON CONFLICT (firebase_uid) DO NOTHING`,
       [user_id, user_id, `${user_id}@temp.com`]
     );
 
-    // 2. Tìm người đang chờ
+    // 2. TÌM NGƯỜI ĐANG CHỜ
     const { rows: waitingUsers } = await pool.query(
       `SELECT * FROM waiting_users ORDER BY created_at ASC`
     );
@@ -106,9 +110,9 @@ app.post("/match", async (req, res) => {
     let bestMatch = null;
     let bestScore = 0;
 
-    // 3. So sánh với AI
+    // 3. SO SÁNH VỚI AI
     for (const user of waitingUsers) {
-      if (user.user_id === user_id) continue; // Bỏ qua chính mình
+      if (user.user_id === user_id) continue;
 
       try {
         const response = await fetch(`${AI_URL}/match`, {
@@ -116,6 +120,8 @@ app.post("/match", async (req, res) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ goals: [goal, user.goal] }),
         });
+
+        if (!response.ok) continue;
         const { similarity_score = 0 } = await response.json();
 
         if (similarity_score > bestScore) {
@@ -123,28 +129,30 @@ app.post("/match", async (req, res) => {
           bestMatch = user;
         }
       } catch (err) {
-        console.error("Lỗi gọi AI:", err);
+        console.error("Lỗi AI:", err.message);
       }
     }
 
-    // 4. Ghép đôi
+    // 4. GHÉP ĐÔI
     if (bestMatch && bestScore >= 0.6) {
       const roomId = bestMatch.room_id;
 
+      // Xóa khỏi hàng chờ
       await pool.query("DELETE FROM waiting_users WHERE room_id = $1", [roomId]);
 
+      // Lưu lịch sử match
       await pool.query(
-  `INSERT INTO users (firebase_uid, name, email)
-   VALUES ($1, $2, $3)
-   ON CONFLICT (firebase_uid) DO NOTHING`,
-  [user_id, user_id, `${user_id}@temp.com`]
-);
+        `INSERT INTO matches 
+         (room_id, user1_id, user2_id, user1_goal, user2_goal, similarity_score)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [roomId, user_id, bestMatch.user_id, goal, bestMatch.goal, bestScore]
+      );
 
       console.log(`MATCHED: ${user_id} ↔ ${bestMatch.user_id} | score: ${bestScore.toFixed(2)}`);
       return res.json({ roomId, isCaller: false });
     }
 
-    // 5. Tạo phòng chờ mới
+    // 5. TẠO PHÒNG CHỜ MỚI
     const { rows } = await pool.query(
       `INSERT INTO waiting_users (user_id, goal) 
        VALUES ($1, $2) RETURNING room_id`,
