@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import http from "http";
 import { WebSocketServer } from "ws";
@@ -8,39 +9,44 @@ import pkg from "pg";
 const { Pool } = pkg;
 
 // =============================
-// ⚙️ CẤU HÌNH KẾT NỐI DATABASE
+// CẤU HÌNH DATABASE
 // =============================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
 });
 
 // =============================
-// 🚀 KHỞI TẠO SERVER EXPRESS
+// KHỞI TẠO SERVER
 // =============================
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔗 AI server (qua Cloudflare Tunnel)
-const AI_URL = " https://stereo-generator-undertake-casa.trycloudflare.com";
-
-// Bộ nhớ tạm (WebSocket)
-const rooms = {}; // roomId -> [WebSocket clients]
+const AI_URL = "https://stereo-generator-undertake-casa.trycloudflare.com";
+const rooms = {}; // roomId -> [WebSocket]
 
 // =============================
-// 🧩 API POST /match
+// API /match – BẮT BUỘC user_id
 // =============================
 app.post("/match", async (req, res) => {
-  const { goal } = req.body;
-  if (!goal) return res.status(400).json({ error: "Thiếu goal" });
+  const { goal, user_id } = req.body;
+
+  if (!goal || !user_id) {
+    return res.status(400).json({ error: "Thiếu goal hoặc user_id" });
+  }
 
   try {
-    // Lấy danh sách người đang chờ trong DB
-    const { rows: waitingUsers } = await pool.query("SELECT * FROM waiting_users ORDER BY created_at ASC");
+    // Lấy người đang chờ (loại chính mình)
+    const { rows: waitingUsers } = await pool.query(
+      `SELECT * FROM waiting_users 
+       WHERE user_id != $1 
+       ORDER BY created_at ASC`,
+      [user_id]
+    );
 
     let bestMatch = null;
-    let bestScore = 0.0;
+    let bestScore = 0;
 
     for (const user of waitingUsers) {
       try {
@@ -49,56 +55,56 @@ app.post("/match", async (req, res) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ goals: [goal, user.goal] }),
         });
+        const { similarity_score = 0 } = await response.json();
+        console.log(`So sánh "${goal}" vs "${user.goal}" → ${similarity_score}`);
 
-        const result = await response.json();
-        const score = result.similarity_score || 0;
-        console.log(`🤖 So sánh "${goal}" vs "${user.goal}" → điểm ${score}`);
-
-        if (score > bestScore) {
-          bestScore = score;
+        if (similarity_score > bestScore) {
+          bestScore = similarity_score;
           bestMatch = user;
         }
       } catch (err) {
-        console.error("❌ Lỗi gọi AI:", err);
+        console.error("Lỗi AI:", err);
       }
     }
 
-    // Nếu tìm được người phù hợp
-    if (bestMatch && bestScore >= 0.7) {
+    // GHÉP ĐÔI
+    if (bestMatch && bestScore >= 0.6) { // Giảm ngưỡng cho dễ test
       const roomId = bestMatch.room_id;
 
       // Xóa người kia khỏi hàng chờ
       await pool.query("DELETE FROM waiting_users WHERE room_id = $1", [roomId]);
 
-      // Lưu kết quả match vào DB
+      // Lưu match
       await pool.query(
-        `INSERT INTO matches (room_id, user1_goal, user2_goal, similarity_score)
-         VALUES ($1, $2, $3, $4)`,
-        [roomId, goal, bestMatch.goal, bestScore]
+        `INSERT INTO matches 
+         (room_id, user1_id, user2_id, user1_goal, user2_goal, similarity_score)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [roomId, user_id, bestMatch.user_id, goal, bestMatch.goal, bestScore]
       );
 
-      console.log(`🔗 Ghép thành công giữa "${goal}" và "${bestMatch.goal}" | roomId: ${roomId}`);
+      console.log(`MATCHED: ${user_id} ↔ ${bestMatch.user_id} | room: ${roomId}`);
       return res.json({ roomId, isCaller: false });
     }
 
-    // Nếu chưa ai phù hợp → tạo phòng mới
+    // TẠO PHÒNG MỚI
     const roomId = uuidv4();
     await pool.query(
-      "INSERT INTO waiting_users (room_id, goal) VALUES ($1, $2)",
-      [roomId, goal]
+      `INSERT INTO waiting_users (room_id, user_id, goal) 
+       VALUES ($1, $2, $3)`,
+      [roomId, user_id, goal]
     );
 
-    console.log(`🆕 Tạo phòng chờ mới cho "${goal}": ${roomId}`);
+    console.log(`Tạo phòng chờ: user ${user_id} | "${goal}" | ${roomId}`);
     res.json({ roomId, isCaller: true });
 
   } catch (err) {
-    console.error("❌ Lỗi xử lý /match:", err);
+    console.error("Lỗi /match:", err);
     res.status(500).json({ error: "Lỗi server" });
   }
 });
 
 // =============================
-// ⚡ WEBSOCKET SIGNALING
+// WEBSOCKET SIGNALING
 // =============================
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
@@ -111,42 +117,48 @@ wss.on("connection", (ws, req) => {
   if (!rooms[roomId]) rooms[roomId] = [];
   rooms[roomId].push(ws);
 
-  console.log(`✅ Kết nối mới tới room: ${roomId}`);
-  console.log(`👥 Room ${roomId} có ${rooms[roomId].length} client`);
+  console.log(`Kết nối mới tới room: ${roomId}`);
+  console.log(`Room ${roomId} có ${rooms[roomId].length} client`);
 
-  // Khi đủ 2 người → gửi tín hiệu sẵn sàng
   if (rooms[roomId].length === 2) {
     rooms[roomId].forEach(client => {
-      if (client.readyState === ws.OPEN)
+      if (client.readyState === client.OPEN) {
         client.send(JSON.stringify({ ready: true }));
+      }
     });
-    console.log(`🚀 Room ${roomId} sẵn sàng cho cuộc gọi`);
+    console.log(`Room ${roomId} sẵn sàng`);
   }
 
-  // Chuyển tiếp tín hiệu WebRTC giữa 2 người
   ws.on("message", (msg) => {
-    const data = JSON.parse(msg);
-    const others = rooms[roomId].filter(c => c !== ws && c.readyState === ws.OPEN);
-    others.forEach(client => client.send(JSON.stringify(data)));
+    try {
+      const data = JSON.parse(msg);
+      const others = rooms[roomId].filter(c => c !== ws && c.readyState === c.OPEN);
+      others.forEach(c => c.send(JSON.stringify(data)));
+    } catch (err) {
+      console.error("Lỗi parse message:", err);
+    }
   });
 
-  // Khi 1 người thoát
   ws.on("close", async () => {
     if (!rooms[roomId]) return;
     rooms[roomId] = rooms[roomId].filter(c => c !== ws);
     if (rooms[roomId].length === 0) {
       delete rooms[roomId];
-      console.log(`🗑️ Room deleted: ${roomId}`);
-      // Xóa luôn trong DB nếu chưa match
+      console.log(`Room deleted: ${roomId}`);
       await pool.query("DELETE FROM waiting_users WHERE room_id = $1", [roomId]);
-    } else {
-      console.log(`❌ Client left room ${roomId}`);
     }
   });
 });
 
 // =============================
-// 🚀 KHỞI CHẠY SERVER
+// HEALTH CHECK
+// =============================
+app.get("/health", (req, res) => res.json({ status: "OK" }));
+
+// =============================
+// KHỞI CHẠY
 // =============================
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => console.log(`✅ Backend WebSocket server running on port ${PORT}`));
+server.listen(PORT, () => {
+  console.log(`Backend chạy trên cổng ${PORT}`);
+});
