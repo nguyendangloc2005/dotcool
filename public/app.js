@@ -145,38 +145,14 @@ if (document.getElementById('goalInput')) {
   });
 
   // Tìm người phù hợp
-  window.findMatch = async function () {
-  const goal = document.getElementById("goalInput").value.trim();
-  if (!goal) return alert("Hãy nhập mục tiêu của bạn!");
+   window.findMatch = async function () {
+    const goal = document.getElementById("goalInput").value.trim();
+    if (!goal) return alert("Hãy nhập mục tiêu của bạn (ví dụ: học tiếng Anh, lập trình, du lịch...).");
 
-  const user = auth.currentUser;
-  if (!user) return alert("Bạn chưa đăng nhập!");
+    const user = auth.currentUser;
+    if (!user) return alert("Bạn chưa đăng nhập!");
 
-  const user_id = user.uid;
-
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    localVideo.srcObject = localStream;
-  } catch (err) {
-    return alert("Không thể truy cập camera/micro.");
-  }
-
-  try {
-    const res = await fetch("https://dotcool-back2.onrender.com/match", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goal, user_id }),
-    });
-
-    if (!res.ok) throw new Error("Lỗi server");
-    const { roomId, isCaller } = await res.json();
-    isCallerGlobal = isCaller;
-    startWebRTC(isCaller, roomId);
-  } catch (err) {
-    alert("Không thể kết nối server. Vui lòng thử lại.");
-  }
-};
-
+    const user_id = user.uid;
     // Bật camera
     try {
       localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
