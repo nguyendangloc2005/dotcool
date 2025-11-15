@@ -1,17 +1,15 @@
-// ========================
 // app.js – TẤT CẢ TRONG MỘT
 // Login + Video Call + Firebase Auth + WebRTC
 // ========================
-
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js';
-import { 
-  getAuth, 
-  GoogleAuthProvider, 
-  signInWithPopup, 
-  createUserWithEmailAndPassword, 
-  signInWithEmailAndPassword, 
-  onAuthStateChanged, 
-  signOut 
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  onAuthStateChanged,
+  signOut
 } from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
 
 // === CẤU HÌNH FIREBASE ===
@@ -29,14 +27,18 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
 
-// === BIẾN WEBRTC (CHỈ DÙNG TRÊN index.html) ===
+// === BIẾN WEBRTC ===
 let localVideo, remoteVideo, localStream, peerConnection, socket, isCallerGlobal = false;
-
 const iceServers = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     {
       urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
       username: "openrelayproject",
       credential: "openrelayproject",
     },
@@ -143,77 +145,123 @@ if (document.getElementById('goalInput')) {
   });
 
   // Tìm người phù hợp
-  window.findMatch = async function() {
+  window.findMatch = async function () {
     const goal = document.getElementById("goalInput").value.trim();
-    if (!goal) return alert("Hãy nhập mục tiêu của bạn.");
+    if (!goal) return alert("Hãy nhập mục tiêu của bạn (ví dụ: học tiếng Anh, lập trình, du lịch...).");
 
+    const user = auth.currentUser;
+    if (!user) return alert("Bạn chưa đăng nhập!");
+
+    const user_id = user.uid;
+
+    // Bật camera
     try {
       localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       localVideo.srcObject = localStream;
+      console.log("Camera & mic đã bật");
     } catch (err) {
-      return alert("Không thể truy cập camera/micro: " + err.message);
+      console.error("Lỗi truy cập thiết bị:", err);
+      return alert("Không thể truy cập camera/micro. Vui lòng cấp quyền.");
     }
 
+    // Gửi yêu cầu match
     try {
       const res = await fetch("https://dotcool-back2.onrender.com/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goal }),
+        body: JSON.stringify({ goal, user_id }),
       });
+
+      if (!res.ok) {
+        const error = await res.text();
+        throw new Error(`Server error: ${res.status} - ${error}`);
+      }
+
       const { roomId, isCaller } = await res.json();
       isCallerGlobal = isCaller;
+
+      console.log(`Match thành công! Room: ${roomId} | Bạn là: ${isCaller ? "người gọi" : "người nhận"}`);
       startWebRTC(isCaller, roomId);
+
     } catch (err) {
       console.error("Lỗi kết nối server:", err);
-      alert("Không thể kết nối server. Vui lòng thử lại.");
+      alert("Không thể kết nối đến server. Vui lòng thử lại sau.");
     }
   };
 
   // WebRTC
   function startWebRTC(isCaller, roomId) {
-    peerConnection = new RTCPeerConnection(iceServers);
-    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+    // Đóng kết nối cũ nếu có
+    if (peerConnection) peerConnection.close();
+    if (socket) socket.close();
 
+    peerConnection = new RTCPeerConnection(iceServers);
+
+    // Thêm track từ localStream
+    localStream.getTracks().forEach(track => {
+      peerConnection.addTrack(track, localStream);
+    });
+
+    // Nhận stream từ đối phương
     peerConnection.ontrack = (event) => {
       remoteVideo.srcObject = event.streams[0];
+      console.log("Nhận được video từ đối phương");
     };
 
     peerConnection.onconnectionstatechange = () => {
       console.log("Trạng thái kết nối:", peerConnection.connectionState);
+      if (peerConnection.connectionState === "failed") {
+        alert("Kết nối thất bại. Đang tìm người mới...");
+        resetCall();
+      }
     };
 
-    socket = new WebSocket(`wss://dotcool-back2.onrender.com/ws?roomId=${roomId}`);
-    socket.onopen = () => console.log("WebSocket kết nối thành công");
+    // Kết nối WebSocket
+    const wsUrl = `wss://dotcool-back2.onrender.com/ws?roomId=${roomId}`;
+    socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+      console.log("WebSocket kết nối thành công");
+    };
 
     socket.onmessage = async ({ data }) => {
-      const msg = JSON.parse(data);
+      try {
+        const msg = JSON.parse(data);
 
-      if (msg.ready && isCallerGlobal) {
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        socket.send(JSON.stringify({ offer }));
-      }
-
-      if (msg.offer) {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        socket.send(JSON.stringify({ answer }));
-      }
-
-      if (msg.answer) {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.answer));
-      }
-
-      if (msg.iceCandidate) {
-        try {
-          await peerConnection.addIceCandidate(msg.iceCandidate);
-        } catch (err) {
-          console.error("Lỗi ICE candidate:", err);
+        if (msg.ready && isCallerGlobal) {
+          // Caller tạo offer
+          const offer = await peerConnection.createOffer();
+          await peerConnection.setLocalDescription(offer);
+          socket.send(JSON.stringify({ offer }));
+          console.log("Đã gửi offer");
         }
+
+        if (msg.offer && !isCallerGlobal) {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
+          const answer = await peerConnection.createAnswer();
+          await peerConnection.setLocalDescription(answer);
+          socket.send(JSON.stringify({ answer }));
+          console.log("Đã gửi answer");
+        }
+
+        if (msg.answer) {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.answer));
+          console.log("Đã nhận answer");
+        }
+
+        if (msg.iceCandidate) {
+          try {
+            await peerConnection.addIceCandidate(msg.iceCandidate);
+          } catch (err) {
+            console.error("Lỗi ICE candidate:", err);
+          }
+        }
+      } catch (err) {
+        console.error("Lỗi xử lý message:", err);
       }
     };
 
+    // Gửi ICE candidate
     peerConnection.onicecandidate = ({ candidate }) => {
       if (candidate && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ iceCandidate: candidate }));
@@ -221,14 +269,35 @@ if (document.getElementById('goalInput')) {
     };
 
     socket.onclose = () => {
-      alert("Kết nối đã đóng. Đang tìm người mới...");
+      console.log("WebSocket đóng");
+      alert("Đối phương đã rời cuộc gọi. Đang tìm người mới...");
+      resetCall();
     };
+
+    socket.onerror = (err) => {
+      console.error("WebSocket lỗi:", err);
+    };
+  }
+
+  // Reset khi kết thúc cuộc gọi
+  function resetCall() {
+    if (socket) socket.close();
+    if (peerConnection) peerConnection.close();
+    socket = null;
+    peerConnection = null;
+    setTimeout(() => {
+      document.getElementById("goalInput").value = "";
+      alert("Sẵn sàng tìm người mới!");
+    }, 1000);
   }
 
   // Dọn dẹp khi rời trang
   window.addEventListener('beforeunload', () => {
     if (socket) socket.close();
     if (peerConnection) peerConnection.close();
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+    }
   });
 }
 
@@ -237,13 +306,19 @@ if (document.getElementById('goalInput')) {
 // ========================
 function showError(id, msg) {
   const el = document.getElementById(id);
-  if (el) el.textContent = msg;
+  if (el) {
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
 }
 
 function clearErrors(ids) {
   ids.forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.textContent = '';
+    if (el) {
+      el.textContent = '';
+      el.style.display = 'none';
+    }
   });
 }
 
@@ -252,11 +327,11 @@ function handleAuthError(err, type) {
   if (code === 'auth/email-already-in-use') {
     showError('emailError', 'Email này đã được sử dụng.');
   } else if (code === 'auth/weak-password') {
-    showError('passwordError', 'Mật khẩu quá yếu.');
+    showError('passwordError', 'Mật khẩu quá yếu (ít nhất 6 ký tự).');
   } else if (code === 'auth/user-not-found' || code === 'auth/wrong-password') {
     showError('loginPasswordError', 'Email hoặc mật khẩu không đúng.');
   } else if (code === 'auth/too-many-requests') {
-    alert('Quá nhiều lần thử. Vui lòng thử lại sau.');
+    alert('Quá nhiều lần thử. Vui lòng thử lại sau 1 phút.');
   } else {
     alert('Lỗi: ' + err.message);
   }
