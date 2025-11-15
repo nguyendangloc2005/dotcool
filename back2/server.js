@@ -134,11 +134,11 @@ app.post("/match", async (req, res) => {
       await pool.query("DELETE FROM waiting_users WHERE room_id = $1", [roomId]);
 
       await pool.query(
-        `INSERT INTO matches 
-         (room_id, user1_id, user2_id, user1_goal, user2_goal, similarity_score)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [roomId, user_id, bestMatch.user_id, goal, bestMatch.goal, bestScore]
-      );
+  `INSERT INTO users (firebase_uid, name, email)
+   VALUES ($1, $2, $3)
+   ON CONFLICT (firebase_uid) DO NOTHING`,
+  [user_id, user_id, `${user_id}@temp.com`]
+);
 
       console.log(`MATCHED: ${user_id} ↔ ${bestMatch.user_id} | score: ${bestScore.toFixed(2)}`);
       return res.json({ roomId, isCaller: false });
