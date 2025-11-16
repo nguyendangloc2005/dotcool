@@ -1,4 +1,4 @@
-// server.js – HOÀN CHỈNH, KHÔNG LỖI, KHÔNG CẦN XÓA DB
+// server.js – HOÀN CHỈNH, KHÔNG CẦN SQL, CHẠY NGAY!
 import express from "express";
 import http from "http";
 import { WebSocketServer } from "ws";
@@ -15,17 +15,23 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
 });
 
-// TỰ ĐỘNG TẠO BẢNG + THÊM CỘT NẾU CHƯA CÓ
+// TỰ ĐỘNG TẠO BẢNG MỚI – XÓA BẢNG CŨ NẾU CẦN
 async function runMigration() {
   const client = await pool.connect();
   try {
     console.log("Bắt đầu migration...");
 
-    // 1. Tạo bảng users + thêm cột firebase_uid nếu chưa có
+    // 1. XÓA BẢNG CŨ (nếu có) → ĐẢM BẢO SẠCH
     await client.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL,
-        firebase_uid TEXT UNIQUE,
+      DROP TABLE IF EXISTS matches CASCADE;
+      DROP TABLE IF EXISTS waiting_users CASCADE;
+      DROP TABLE IF EXISTS users CASCADE;
+    `);
+
+    // 2. TẠO BẢNG users – DÙNG firebase_uid LÀM KHÓA CHÍNH
+    await client.query(`
+      CREATE TABLE users (
+        firebase_uid TEXT PRIMARY KEY,
         name TEXT,
         email TEXT,
         photo_url TEXT,
@@ -33,15 +39,9 @@ async function runMigration() {
       );
     `);
 
-    // Thêm cột firebase_uid nếu chưa tồn tại
+    // 3. TẠO BẢNG waiting_users – user_id TEXT
     await client.query(`
-      ALTER TABLE users 
-      ADD COLUMN IF NOT EXISTS firebase_uid TEXT UNIQUE;
-    `);
-
-    // 2. Tạo bảng waiting_users
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS waiting_users (
+      CREATE TABLE waiting_users (
         id SERIAL PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(firebase_uid) ON DELETE CASCADE,
         room_id UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
@@ -50,9 +50,9 @@ async function runMigration() {
       );
     `);
 
-    // 3. Tạo bảng matches
+    // 4. TẠO BẢNG matches – user1_id, user2_id TEXT
     await client.query(`
-      CREATE TABLE IF NOT EXISTS matches (
+      CREATE TABLE matches (
         id SERIAL PRIMARY KEY,
         room_id UUID UNIQUE NOT NULL,
         user1_id TEXT NOT NULL REFERENCES users(firebase_uid),
@@ -64,13 +64,13 @@ async function runMigration() {
       );
     `);
 
-    // 4. Tạo index
+    // 5. TẠO INDEX
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_waiting_room ON waiting_users(room_id);
       CREATE INDEX IF NOT EXISTS idx_waiting_user ON waiting_users(user_id);
     `);
 
-    console.log("Migration thành công! DB đã sẵn sàng.");
+    console.log("Migration thành công! DB đã được tạo mới.");
   } catch (err) {
     console.error("Migration lỗi:", err.message);
   } finally {
@@ -100,7 +100,7 @@ app.post("/match", async (req, res) => {
   }
 
   try {
-    // 1. THÊM USER (dùng firebase_uid)
+    // 1. THÊM USER (firebase_uid là khóa chính)
     await pool.query(
       `INSERT INTO users (firebase_uid, name, email)
        VALUES ($1, $2, $3)
@@ -108,9 +108,10 @@ app.post("/match", async (req, res) => {
       [user_id, user_id, `${user_id}@temp.com`]
     );
 
-    // 2. TÌM NGƯỜI ĐANG CHỜ
+    // 2. TÌM NGƯỜI ĐANG CHỜ (loại chính mình)
     const { rows: waitingUsers } = await pool.query(
-      `SELECT * FROM waiting_users ORDER BY created_at ASC`
+      `SELECT * FROM waiting_users WHERE user_id != $1 ORDER BY created_at ASC`,
+      [user_id]
     );
 
     let bestMatch = null;
@@ -118,8 +119,6 @@ app.post("/match", async (req, res) => {
 
     // 3. SO SÁNH VỚI AI (bỏ qua nếu lỗi)
     for (const user of waitingUsers) {
-      if (user.user_id === user_id) continue;
-
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5000);
