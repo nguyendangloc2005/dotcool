@@ -1,4 +1,4 @@
-// server.js – HOÀN CHỈNH, KHÔNG CẦN SQL, CHẠY NGAY!
+// server.js – HOÀN CHỈNH, KHÔNG LỖI, CHẠY NGAY!
 import express from "express";
 import http from "http";
 import { WebSocketServer } from "ws";
@@ -6,6 +6,9 @@ import cors from "cors";
 import fetch from "node-fetch";
 import pkg from "pg";
 const { Pool } = pkg;
+
+// Import WebSocket để dùng WebSocket.OPEN
+import { WebSocket } from "ws";
 
 // =============================
 // CẤU HÌNH DATABASE
@@ -15,20 +18,18 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
 });
 
-// TỰ ĐỘNG TẠO BẢNG MỚI – XÓA BẢNG CŨ NẾU CẦN
+// TỰ ĐỘNG TẠO BẢNG MỚI
 async function runMigration() {
   const client = await pool.connect();
   try {
     console.log("Bắt đầu migration...");
 
-    // 1. XÓA BẢNG CŨ (nếu có) → ĐẢM BẢO SẠCH
     await client.query(`
       DROP TABLE IF EXISTS matches CASCADE;
       DROP TABLE IF EXISTS waiting_users CASCADE;
       DROP TABLE IF EXISTS users CASCADE;
     `);
 
-    // 2. TẠO BẢNG users – DÙNG firebase_uid LÀM KHÓA CHÍNH
     await client.query(`
       CREATE TABLE users (
         firebase_uid TEXT PRIMARY KEY,
@@ -39,7 +40,6 @@ async function runMigration() {
       );
     `);
 
-    // 3. TẠO BẢNG waiting_users – user_id TEXT
     await client.query(`
       CREATE TABLE waiting_users (
         id SERIAL PRIMARY KEY,
@@ -50,7 +50,6 @@ async function runMigration() {
       );
     `);
 
-    // 4. TẠO BẢNG matches – user1_id, user2_id TEXT
     await client.query(`
       CREATE TABLE matches (
         id SERIAL PRIMARY KEY,
@@ -64,7 +63,6 @@ async function runMigration() {
       );
     `);
 
-    // 5. TẠO INDEX
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_waiting_room ON waiting_users(room_id);
       CREATE INDEX IF NOT EXISTS idx_waiting_user ON waiting_users(user_id);
@@ -86,7 +84,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const AI_URL = "https://engineer-buf-sbjct-reno.trycloudflare.com";
+const AI_URL = "https://stereo-generator-undertake-casa.trycloudflare.com";
 const rooms = {};
 
 // =============================
@@ -100,7 +98,6 @@ app.post("/match", async (req, res) => {
   }
 
   try {
-    // 1. THÊM USER (firebase_uid là khóa chính)
     await pool.query(
       `INSERT INTO users (firebase_uid, name, email)
        VALUES ($1, $2, $3)
@@ -108,7 +105,6 @@ app.post("/match", async (req, res) => {
       [user_id, user_id, `${user_id}@temp.com`]
     );
 
-    // 2. TÌM NGƯỜI ĐANG CHỜ (loại chính mình)
     const { rows: waitingUsers } = await pool.query(
       `SELECT * FROM waiting_users WHERE user_id != $1 ORDER BY created_at ASC`,
       [user_id]
@@ -117,7 +113,6 @@ app.post("/match", async (req, res) => {
     let bestMatch = null;
     let bestScore = 0;
 
-    // 3. SO SÁNH VỚI AI (bỏ qua nếu lỗi)
     for (const user of waitingUsers) {
       try {
         const controller = new AbortController();
@@ -143,7 +138,6 @@ app.post("/match", async (req, res) => {
       }
     }
 
-    // 4. GHÉP ĐÔI
     if (bestMatch && bestScore >= 0.6) {
       const roomId = bestMatch.room_id;
 
@@ -160,7 +154,6 @@ app.post("/match", async (req, res) => {
       return res.json({ roomId, isCaller: false });
     }
 
-    // 5. TẠO PHÒNG MỚI
     const { rows } = await pool.query(
       `INSERT INTO waiting_users (user_id, goal) 
        VALUES ($1, $2) RETURNING room_id`,
@@ -190,10 +183,15 @@ wss.on("connection", (ws, req) => {
   rooms[roomId] ??= [];
   rooms[roomId].push(ws);
 
+  console.log(`Kết nối mới → room: ${roomId} (${rooms[roomId].length}/2)`);
+
   if (rooms[roomId].length === 2) {
     rooms[roomId].forEach(c => {
-      if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify({ ready: true }));
+      if (c.readyState === WebSocket.OPEN) {
+        c.send(JSON.stringify({ ready: true }));
+      }
     });
+    console.log(`Room ${roomId} sẵn sàng gọi`);
   }
 
   ws.on("message", (msg) => {
@@ -202,7 +200,9 @@ wss.on("connection", (ws, req) => {
       rooms[roomId]
         ?.filter(c => c !== ws && c.readyState === WebSocket.OPEN)
         .forEach(c => c.send(JSON.stringify(data)));
-    } catch {}
+    } catch (err) {
+      console.error("Lỗi message:", err);
+    }
   });
 
   ws.on("close", async () => {
@@ -211,6 +211,7 @@ wss.on("connection", (ws, req) => {
     if (rooms[roomId].length === 0) {
       delete rooms[roomId];
       await pool.query("DELETE FROM waiting_users WHERE room_id = $1", [roomId]);
+      console.log(`Room ${roomId} đã xóa`);
     }
   });
 });
