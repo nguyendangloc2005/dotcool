@@ -86,7 +86,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const AI_URL = "https://stereo-generator-undertake-casa.trycloudflare.com";
+const AI_URL = "https://engineer-buf-sbjct-reno.trycloudflare.com";
 const rooms = {};
 
 // =============================
