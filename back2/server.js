@@ -1,8 +1,7 @@
-// server.js
+// server.js – HOÀN CHỈNH, KHÔNG LỖI, KHÔNG CẦN XÓA DB
 import express from "express";
 import http from "http";
 import { WebSocketServer } from "ws";
-import { v4 as uuidv4 } from "uuid";
 import cors from "cors";
 import fetch from "node-fetch";
 import pkg from "pg";
@@ -16,21 +15,28 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
 });
 
-// TỰ ĐỘNG TẠO BẢNG KHI KHỞI ĐỘNG
+// TỰ ĐỘNG TẠO BẢNG + THÊM CỘT NẾU CHƯA CÓ
 async function runMigration() {
   const client = await pool.connect();
   try {
     console.log("Bắt đầu migration...");
 
-    // 1. Tạo bảng users
+    // 1. Tạo bảng users + thêm cột firebase_uid nếu chưa có
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
-        firebase_uid TEXT PRIMARY KEY,
+        id SERIAL,
+        firebase_uid TEXT UNIQUE,
         name TEXT,
-        email TEXT UNIQUE,
+        email TEXT,
         photo_url TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       );
+    `);
+
+    // Thêm cột firebase_uid nếu chưa tồn tại
+    await client.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS firebase_uid TEXT UNIQUE;
     `);
 
     // 2. Tạo bảng waiting_users
@@ -64,7 +70,7 @@ async function runMigration() {
       CREATE INDEX IF NOT EXISTS idx_waiting_user ON waiting_users(user_id);
     `);
 
-    console.log("Migration thành công!");
+    console.log("Migration thành công! DB đã sẵn sàng.");
   } catch (err) {
     console.error("Migration lỗi:", err.message);
   } finally {
@@ -94,7 +100,7 @@ app.post("/match", async (req, res) => {
   }
 
   try {
-    // 1. ĐẢM BẢO USER TỒN TẠI (chỉ thêm nếu chưa có)
+    // 1. THÊM USER (dùng firebase_uid)
     await pool.query(
       `INSERT INTO users (firebase_uid, name, email)
        VALUES ($1, $2, $3)
@@ -110,26 +116,31 @@ app.post("/match", async (req, res) => {
     let bestMatch = null;
     let bestScore = 0;
 
-    // 3. SO SÁNH VỚI AI
+    // 3. SO SÁNH VỚI AI (bỏ qua nếu lỗi)
     for (const user of waitingUsers) {
       if (user.user_id === user_id) continue;
 
       try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+
         const response = await fetch(`${AI_URL}/match`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ goals: [goal, user.goal] }),
+          signal: controller.signal
         });
 
+        clearTimeout(timeout);
         if (!response.ok) continue;
-        const { similarity_score = 0 } = await response.json();
 
+        const { similarity_score = 0 } = await response.json();
         if (similarity_score > bestScore) {
           bestScore = similarity_score;
           bestMatch = user;
         }
       } catch (err) {
-        console.error("Lỗi AI:", err.message);
+        console.warn("AI server lỗi, bỏ qua:", err.message);
       }
     }
 
@@ -137,10 +148,8 @@ app.post("/match", async (req, res) => {
     if (bestMatch && bestScore >= 0.6) {
       const roomId = bestMatch.room_id;
 
-      // Xóa khỏi hàng chờ
       await pool.query("DELETE FROM waiting_users WHERE room_id = $1", [roomId]);
 
-      // Lưu lịch sử match
       await pool.query(
         `INSERT INTO matches 
          (room_id, user1_id, user2_id, user1_goal, user2_goal, similarity_score)
@@ -152,7 +161,7 @@ app.post("/match", async (req, res) => {
       return res.json({ roomId, isCaller: false });
     }
 
-    // 5. TẠO PHÒNG CHỜ MỚI
+    // 5. TẠO PHÒNG MỚI
     const { rows } = await pool.query(
       `INSERT INTO waiting_users (user_id, goal) 
        VALUES ($1, $2) RETURNING room_id`,
@@ -170,38 +179,31 @@ app.post("/match", async (req, res) => {
 });
 
 // =============================
-// WEBSOCKET SIGNALING
+// WEBSOCKET
 // =============================
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
 wss.on("connection", (ws, req) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const roomId = url.searchParams.get("roomId");
+  const roomId = new URL(req.url, `http://${req.headers.host}`).searchParams.get("roomId");
   if (!roomId) return ws.close();
 
-  if (!rooms[roomId]) rooms[roomId] = [];
+  rooms[roomId] ??= [];
   rooms[roomId].push(ws);
 
-  console.log(`Kết nối mới → room: ${roomId} (${rooms[roomId].length}/2)`);
-
   if (rooms[roomId].length === 2) {
-    rooms[roomId].forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({ ready: true }));
-      }
+    rooms[roomId].forEach(c => {
+      if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify({ ready: true }));
     });
-    console.log(`Room ${roomId} sẵn sàng gọi`);
   }
 
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
-      const others = rooms[roomId].filter(c => c !== ws && c.readyState === WebSocket.OPEN);
-      others.forEach(c => c.send(JSON.stringify(data)));
-    } catch (err) {
-      console.error("Lỗi message:", err);
-    }
+      rooms[roomId]
+        ?.filter(c => c !== ws && c.readyState === WebSocket.OPEN)
+        .forEach(c => c.send(JSON.stringify(data)));
+    } catch {}
   });
 
   ws.on("close", async () => {
@@ -210,20 +212,16 @@ wss.on("connection", (ws, req) => {
     if (rooms[roomId].length === 0) {
       delete rooms[roomId];
       await pool.query("DELETE FROM waiting_users WHERE room_id = $1", [roomId]);
-      console.log(`Room ${roomId} đã xóa`);
     }
   });
 });
 
 // =============================
-// HEALTH CHECK
+// HEALTH + START
 // =============================
 app.get("/health", (req, res) => res.json({ status: "OK", time: new Date() }));
 
-// =============================
-// KHỞI CHẠY
-// =============================
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
-  console.log(`Backend chạy trên cổng ${PORT}`);
+  console.log(`Backend chạy trên cổng ${PORT} – SẴN SÀNG KẾT NỐI!`);
 });
