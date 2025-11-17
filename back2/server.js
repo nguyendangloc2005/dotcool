@@ -84,7 +84,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const AI_URL = "https://consciousness-acquisitions-inside-stanley.trycloudflare.com";
+const AI_URL = "https://ordered-def-nice-slowly.trycloudflare.com";
 const rooms = {};
 
 // =============================
